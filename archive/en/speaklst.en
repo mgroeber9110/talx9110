@@ -1,0 +1,245 @@
+{Key}		Key
+{Win}		Window
+{On}		On
+{Off}		Off
+{Sel}		Selection
+{Prop}		is
+{Entry}		Text
+{Editor}	Text field
+{HasMenu}	Menu available
+{Menu}		Menu
+{Infra}		Infrared
+{App1}		Telephone
+{App2}		Fax
+{App3}		SMS
+{App4}		Internet
+{App5}		Contacts
+{App6}		Notes
+{App7}		Calendar
+{App8}		System
+{App9}		Extras
+{Tab}		Tab
+{BTab}		Back Tab
+{Ctrl}		Control
+{Shift}		Shift
+{Chr}		Char
+{Enter}		Enter
+{Backsp}	Backspace
+{Up}		Cursor up
+{Down}		Cursor down
+{Left}		Cursor left
+{Right}		Cursor right
+{CapsOn}	Caps Lock on
+{CapsOff}	Caps Lock off
+{Help}		Help
+{Zoom}		Zoom
+{Backl}		Backlight
+{ReadWin}	Read window
+{Front}		switch to TALX window
+{Softkey}	Read function keys
+{ReadTim}	Read time and date
+{Indic}		Read status indicator
+{ChgEcho}	Change key echo
+{ChgCaps}	Change speaking of upper case
+{ChgLong}	Change spelling alphabet
+{ChgPunc}	Change speaking of punctuation
+{PSpeed}	Speak slower
+{NSpeed}	Speak faster
+{PVol}		Volume down
+{NVol}		Volume up
+{ReadL}		Read selection
+{SpellL}	Spell selection
+{ReadW}		Read word
+{SpellW}	Spell word
+{ReadC}		Read character
+{ReadCur}	Read from cursor
+{TALXKey}	TALX feature key
+{TALXEsc}	Restore function of next key
+{CtrlP}		Previous item
+{CtrlN}		Next item
+{CtrlH}		Start of text
+{CtrlE}		End of text
+{CtrlC}		Copy text
+{CtrlX}		Cut text
+{CtrlV}		Paste text
+{CtrlT}		Insert time
+{CtrlD}		Insert date
+{CtrlM}		Insert user name
+{Secret}	Password
+{Appoint}	.Entries
+{to}		to
+{resday}	whole day
+{.}		.
+
+{34216475}	Plus
+{1924cbfa}	Minus
+{29b898a3}	Folder
+{a9eff86d}	Received Messages
+{5351e449}	Network
+{52f357da}	Phone is off
+{c47b4707}	Battery
+{793f900c}	Charging battery
+{L0}		0 bars
+{L1}		1 bar
+{L2}		2 bars
+{L3}		3 bars
+{L4}		4 bars
+{0f27ba50}	Speed dial 2
+{9bcc396e}	Speed dial 3
+{384e944a}	Speed dial 4
+{bc5c7ecb}	Speed dial 5
+{2af51a24}	Speed dial 6
+{b3fe9b36}	Speed dial 7
+{6869cc1e}	Speed dial 8
+{a14039a7}	Speed dial 9
+{1737e1b1}	Battery nearly empty
+{61995ccf}	Messages in Outbox
+{83c13595}	Alarm
+{12e42643}	Time
+{8a2f550d}	Date
+{719f7b5b}	Dial prefix
+{558e9cd0}	M M C
+{d6bab377}      Daylight savings time
+
+{SpA}		Alfa 
+{SpB}		Bravo 
+{SpC}		Charlie 
+{SpD}		Delta 
+{SpE}		Echo 
+{SpF}		Foxtrott 
+{SpG}		Golf 
+{SpH}		Hotel 
+{SpI}		India 
+{SpJ}		Juliet 
+{SpK}		Kilo 
+{SpL}		Lima 
+{SpM}		Mike 
+{SpN}		November 
+{SpO}		Oscar 
+{SpP}		Papa 
+{SpQ}		Quebec 
+{SpR}		Romeo 
+{SpS}		Sierra 
+{SpT}		Tango 
+{SpU}		Uniform 
+{SpV}		Victor 
+{SpW}		Whiskey 
+{SpX}		ExRay
+{SpY}		Yankee
+{SpZ}		Zulu
+
+{SpSpace}	Space
+{SpUC}		Capital
+{SpCA}		Caps
+
+!		\1 exclamation mark !
+"		\2 quote
+#		number
+$		dollar
+%		percent
+&		ampersand
+(		\2 open bracket
+)		\2 close bracket
+*		asterisk
++		plus
+,		\#3 comma ,
+-		\#3 dash
+.		\#3 dot .
+/		\1 slash
+:		\#2 colon
+;		\3 semicolon
+<		less than
+=		equals
+>		greater than
+?		\1 question mark ?
+@		at
+[		\2 open angle bracket
+\		backslash
+]		\2 close angle bracket
+^		power sign
+_		underscore
+`		\2 accent
+{		open curly bracket
+|		vertical bar
+}		close curly bracket
+~		tilde
+\x7F	        DEL
+\xA0	        Dagger
+\xA1	        Degree
+\xA2	        Cent
+\xA3	        Pound/Sterling
+\xA4	        Section Sign
+\xA5	        Small Bullet
+\xA6	        Paragraph Sign
+\xA8	        Reserved
+\xA9	        Copyright
+\xAA	        Trademark
+\xAB	        Acute
+\xAC	        Diaeresis or Umlaut
+\xB0	        Infinity
+\xB1	        Plus or Minus
+\xB2	        Less or equal
+\xB3	        Greater or equal
+\xB4	        Yen
+\xB5	        Micro
+\xB9	        Pi
+\xBB	        Feminine Spanish Ordinal
+\xBC	        Masculine Spanish Ordinal
+\xBD	        Omega
+\xC0	        Inverted Question Mark
+\xC1	        Inverted Exclamation Point
+\xC2	        Logical Not
+\xC3	        Root
+\xC4	        Florin
+\xC5	        Approximate
+\xC7	        Left Double Guillemet
+\xC8	        Right Double Guillemet
+\xC9	        Three periods
+\xCA	        Non-breaking space
+\xD0	        Dash
+\xD1	        Long dash
+\xD6	        Division sign
+\xDB	        General Currency Symbol
+\xE0	        Double Dagger
+\xE4	        Per Thousand
+\xF6	        Circumflex
+\xF7	        Tilde
+\xFB	        Ring
+\xFC	        Cedille
+
+{ROutput}       Output
+{RNoOut}        None
+{RIntOut}       Speech (Internal)
+{RExtOut}       Speech (External)
+{RBrOut}        Braille (Handy Tech)
+{RVolume}       Volume
+{RStd}          (Standard)
+{RSpeed}        Speed
+{RPitch}        Pitch
+{REcho}         Key echo
+{REchoNo}       None
+{REchoLet}      Letters
+{REchoWor}      Words
+{REchoBot}      Both
+{RSpeakUC}      Speak upper case
+{RNo}           No
+{RYes}          Yes
+{RSpAlpha}      Spelling alphabet
+{RSpAlph0}      Do not use
+{RSpAlph1}      Use
+{RSpPunct}      Speak punctuation
+{RSpPunc0}      None
+{RSpPunc1}      Some
+{RSpPunc2}      Most
+{RSpPunc3}      All
+{RAbout}        About\TALX
+{RAutoEna}      Autostart is not enabled
+{RAutoDis}      Autostart is enabled
+{RExit}         Exit TALX
+{RAboutT}       About TALX
+{RSerial}       Please enter your serial number\IMEI: %s
+{RInvSer}       Invalid serial number.
+{RTALXFul}      TALX
+{RTALXDem}      TALX Demo
+{RTrMoEna}      Training mode enabled
+{RTrMoDis}      Training mode disabled

@@ -1,0 +1,235 @@
+#include "voice.h"
+#include "braille.h"
+
+#define MAX_SPEAK_BUF 512
+#define SPEAK_BUF_GUARD 40
+
+@class  SpeakApplicationClass, FoamSubApplicationClass;
+
+  @prototype void MACRO_HOTKEY_MSG(word key = bp);
+
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_READ_WINDOW;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_BRING_TO_FRONT;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_INVOKE_HELP;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_READ_SOFTKEYS;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_READ_INDICATOR;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_READ_DATE_TIME;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_TRAINING_ENABLE;
+
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_SAY_LETTER;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_SAY_WORD;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_SPELL_WORD;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_READ_SELECTION;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_SPELL_SELECTION;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_SAY_CONTINUE;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_SAY_SELECTED_TEXT;
+  @message void MSG_MAPP_MAYBE_SAY_NEXT();
+
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_NEXT_ECHO;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_NEXT_SPELLCAPS;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_NEXT_SPELLLONG;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_NEXT_SPELLPUNCT;
+
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_PREV_SPEED;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_NEXT_SPEED;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_PREV_VOLUME;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_NEXT_VOLUME;
+
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_SWAP_DEVICE;
+  
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_NEXT_LANGUAGE;
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_NEXT_TEXTLANGUAGE;
+
+  @message (MACRO_HOTKEY_MSG) MSG_MAPP_TOGGLE_RECORDING;
+
+  @message void MSG_MAPP_TIMER();
+  @message void MSG_MAPP_OTHER_KEY(word key = bp, dword timestamp = cx:dx);
+  
+  @message void MSG_MAPP_SYNTH_TIMER_INT();
+  @message void MSG_MAPP_SYNTH_TIMER_EXT();
+  @message void MSG_MAPP_SYNTH_SERIAL();
+  @message void MSG_MAPP_SYNTH_HTBRAILLE_SERIAL();
+  @message void MSG_MAPP_SYNTH_ALBRAILLE_SERIAL();
+
+  @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_MAPP_OUTPUT_CHANGED;
+  @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_MAPP_VOLUME_CHANGED;
+  @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_MAPP_SPEED_CHANGED;
+  @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_MAPP_PITCH_CHANGED;
+  @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_MAPP_ECHO_CHANGED;
+  @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_MAPP_LANGUAGE_CHANGED;
+  @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_MAPP_TEXTLANGUAGE_CHANGED;
+  @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_MAPP_SPELLCAPS_CHANGED;
+  @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_MAPP_SPELLLONG_CHANGED;
+  @message (GEN_ITEM_GROUP_APPLY_MSG) MSG_MAPP_SPELLPUNCT_CHANGED;
+
+  @message void MSG_BRAILLE_KEY_LEFT();
+  @message void MSG_BRAILLE_KEY_RIGHT();
+  @message void MSG_BRAILLE_KEY_ROUTING(int keyindex);  // keyindex: zero-based
+  @message void MSG_BRAILLE_KEY_MARK_ROUTING();
+
+  @message void MSG_BRAILLE_KEY_FOCUS();
+  @message void MSG_BRAILLE_KEY_ATTRIB();
+  @message void MSG_BRAILLE_KEY_KEYS();
+  @message void MSG_BRAILLE_KEY_STATUS();
+  @message void MSG_BRAILLE_KEY_TITLE();
+  @message void MSG_BRAILLE_KEY_PSEUDOCUR();
+  @message void MSG_BRAILLE_KEY_APPKEYS();
+@endc
+
+typedef enum {
+  TET_FORCE_VERBOSE = 1,
+  TET_NAV_KEY,
+  TET_INCR_SEARCH,
+  TET_NON_NAV_KEY,
+  TET_SAY_LETTER,
+  TET_SAY_WORD,
+  TET_SPELL_WORD,
+  TET_SAY_LINE,
+  TET_SAY_CONTINUE,
+  TET_READ_TREE,
+  TET_READ_SELECTION,
+  TET_SPELL_SELECTION,
+  TET_READ_SOFTKEYS,
+  TET_SAY_NEXT_LINE,
+  TET_SAY_PREV_LINE,
+  TET_SAY_SELECTED_TEXT,
+
+  TET_ACTIONS = 1000,
+  TET_ACTION_ROUTING_CURSOR,
+  TET_ACTION_ROUTING_PSEUDO,
+  TET_ACTION_MARK_CURSOR,
+  TET_ACTION_MARK_PSEUDO,
+} TalkEventType;
+
+#define MAX_TEXT_BUFSIZE 256
+#define MAX_TITLE_BUFSIZE 128 
+#define MAX_LABEL_BUFSIZE 64
+#define MAX_BUTTON_BUFSIZE 32
+#define BUFSIZE_GUARD 16
+
+typedef struct {
+  WordFlags   flags;
+    #define ORF_MENU_FOCUS       0x0001
+    #define ORF_CHOICE_FOCUS     0x0002
+    #define ORF_TEXT_IS_ONE_LINE 0x0004 // Text is single-line object
+    #define ORF_DONT_SPEAK_KEYS  0x0008 // Voice recorder: stay quiet...
+    #define ORF_HAS_MENU         0x0010 // Menu key is enabled
+    #define ORF_TREE_TO_FOCUS    0x0020 // Tree changes with focus
+    #define ORF_MENU_EXCL        0x0040 // Selection is exclusive
+                                        // (implies ORF_MENU_FOCUS)
+    #define ORF_MENU_SELECTED  0x0080   // Current focus is selected
+                                        // (implies ~ORF_MENU_EXCL)
+
+    /* Flags that specify the type/state of current selection in a menu.
+       If one of these changes, the menu item should be treated as changed. */
+    #define ORF_MENU_MASK (ORF_MENU_FOCUS | ORF_MENU_EXCL | ORF_MENU_SELECTED)
+
+  Point       dialogLabelPos;
+  
+  optr        focusLabel;
+  optr        focusParent;
+  optr        textObj;
+  optr        treeObj;
+  optr        dialogLabel;
+  optr        buttonLabels[4];
+  optr        pseudoCursor;
+  optr        pseudoCursorRoot;
+} ObjectRefs;
+
+typedef struct {
+  char        focusLabelText[MAX_TEXT_BUFSIZE];
+  char        focusParentText[MAX_LABEL_BUFSIZE];
+  char        textObjText[MAX_TEXT_BUFSIZE];
+  word        textObjCursorPos,         // cursor offset in textObjText
+              textObjCursorPos2;        // end if selection
+    #define CURSOR_POS_NONE 0xFFFF      // cursor not in area
+  char        treeText[MAX_TEXT_BUFSIZE];
+  char        dialogLabelText[MAX_TITLE_BUFSIZE];
+  char        buttonLabelsText[4][MAX_BUTTON_BUFSIZE];
+
+  char        textObjBackspChar;        // character to the left of cursor
+} ObjectRefTexts;
+
+#define SAY_WHAT_TITLE    0x8000
+#define SAY_WHAT_BUTTON1  0x4000
+#define SAY_WHAT_BUTTON2  0x2000
+#define SAY_WHAT_BUTTON3  0x1000
+#define SAY_WHAT_BUTTON4  0x0800
+#define SAY_WHAT_BUTTONS  0x7800
+#define SAY_WHAT_FOCUS    0x0400
+#define SAY_WHAT_TEXT     0x0200
+#define SAY_WHAT_TEXTPART 0x0100
+#define SAY_WHAT_TREE     0x0080
+#define SAY_WHAT_MENU     0x0040
+#define SAY_WHAT_IS_PROGRESS   0x0002
+#define SAY_WHAT_WILL_CONTINUE 0x0001
+
+extern ClassStruct *olbuttonclass;
+extern optr G_app;
+extern TalkEventType G_eventType;
+extern dword G_eventData;
+extern ObjectRefs G_lastObj;
+extern ObjectRefTexts G_lastObjTexts;
+extern WordFlags G_sayWhat;
+extern dword G_pseudoCursorPos,G_oldPseudoCursorPos;
+extern word G_indicatorCallType;
+
+dword getObjectName(optr obj, char *labelText, word bufsize);
+void CompileOutput(void);
+void UIProgressTest(void);
+
+void _far _pascal My_GrParseGString(
+  GStateHandle gstate,GStateHandle gstring, word flags,void *callback);
+
+extern unsigned long crc_table[256];
+
+void gen_crc_table(void);
+unsigned long calc_crc(byte *buf, int n);
+
+void TranslateLetter(byte *buf, Boolean doUpper);
+
+void SynthesizeKey(byte cs, byte key, byte shift);
+
+/* SYNTH.GOC */
+typedef enum {
+  SPEECH_OFF = 0,
+  SPEECH_INTERNAL,
+  SPEECH_EXTERNAL,
+  SPEECH_HTBRAILLE,
+  SPEECH_ALBRAILLE,
+} SynthType;
+
+#define LANG_NONE     0
+#define LANG_FIRST    1
+#define LANG_GERMAN   1
+#define LANG_ENGLISH  2
+#define LANG_ITALIAN  3
+#define LANG_SWEDISH  4
+#define LANG_DUTCH    5
+#define LANG_FRENCH   6
+#define LANG_SPANISH  7
+#define LANG_COUNT    7
+
+void SynthSwitch(SynthType type);
+void SynthSpeak(byte *buf);
+void SynthStop(Boolean sync);
+void SynthNotifyFinished(void);
+void SynthReload(void);
+
+/* Macro to generate placeholder string */
+#define PL(_pl) "\x01"_pl"\x01"
+
+/* Shorthand for a call that must be on the object's thread */
+@define CALL_ROUTINE(_obj, _routine) \
+  if(ObjTestIfObjBlockRunByCurThread(OptrToHandle(_obj))) \
+    _routine(); \
+  else \
+  { \
+    optr thread = ConstructOptr(MemGetInfo(OptrToHandle(_obj), \
+      MGIT_EXEC_THREAD),0); \
+    @call thread::MSG_PROCESS_CALL_ROUTINE(0,0,0,0,0,0,_routine); \
+  }
+
+/* Variables to control recording mode */
+extern word G_recordingIndex;
+extern Boolean G_recordingActive;

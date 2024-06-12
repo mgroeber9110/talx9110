@@ -1,0 +1,319 @@
+@include <stdapp.goh>
+@include <foam.goh>
+#include <streamC.h>
+
+#include <ansi/stdio.h>
+#include <ansi/string.h>
+
+@include "common.goh"
+#include "macroeng.h"
+
+#include "brail_al.h"
+
+
+@extern object SpeakApp;
+
+static byte brALReplyBuf[80], brALReplyFun;
+static int brALReplyPos, brALReplyLen;
+static byte brALKeyGroup;
+
+
+// Specific states for AL Braille implementation (brState)
+#define BR_AWAITING_REPLY       1
+#define BR_AWAITING_KEY         2
+#define BR_AWAITING_NEW_REPLY   3
+#define BR_AWAITING_REPLY_KEY   4
+
+void LoadALBraille(void)
+{
+    Boolean loaded;
+
+    loaded = BrailleLoad();             // Attempt to initialize common braille
+
+    if(loaded)
+    {
+      /* Set format used by Speechbox */
+      SerialSetFormat(brSerialDriver, BRAILLE_PORT, AL_FORMAT, SM_RAW, AL_BAUD);
+
+      /* Enable notification on incoming data */
+      StreamSetMessageNotify(brSerialDriver, BRAILLE_PORT,
+        ((1 << STREAM_TYPE_READER_OFFSET) |
+	     (STREAM_EVENT_DATA << STREAM_TYPE_EVENT_OFFSET) |
+	     (STREAM_MODE_MESSAGE << STREAM_TYPE_HOW_OFFSET)),
+        MSG_MAPP_SYNTH_ALBRAILLE_SERIAL, @SpeakApp);
+
+      /* Initialize protocol state */
+      brLinePending = FALSE;
+      brPressedKeys = brChordKeys = brPrevChord = 0;
+      brTypewriter = FALSE;
+      brALReplyPos = brALReplyLen = brALReplyFun = 0;
+
+      /* Initialize protocol by clearing display */
+      SpeakSentenceALBraille((byte *)"");
+    }
+}
+
+void UnloadALBraille(void)
+{
+    if(brState!=BR_ERROR)
+    {
+      StreamSetNoNotify(brSerialDriver, BRAILLE_PORT,
+        ((1 << STREAM_TYPE_READER_OFFSET) |
+         (STREAM_EVENT_DATA << STREAM_TYPE_EVENT_OFFSET) |
+         (STREAM_MODE_MESSAGE << STREAM_TYPE_HOW_OFFSET)));
+    }
+
+    BrailleUnload();                    // deinitialize generic braille
+}
+
+static void ALBrailleHandleChord(dword chord)
+{
+    byte cs, key = 0, shift = 0;
+
+    switch(chord)
+    {
+      case BRK_MASK(BRK_LEFT):
+        @call SpeakApp::MSG_BRAILLE_KEY_LEFT(); 
+        break;
+      case BRK_MASK(BRK_RIGHT):
+        @call SpeakApp::MSG_BRAILLE_KEY_RIGHT();
+        break;
+      case BRK_MASK(BRK_UPPAD) | BRK_MASK(BRK_DOWNPAD):
+        cs = CS_CONTROL;  key = VC_F4;     shift = 0; break;
+      case BRK_MASK(BRK_BTAB) | BRK_MASK(BRK_FTAB):
+        cs = CS_CONTROL;  key = VC_F1;     shift = 0; break;
+
+      case BRK_MASK(BRK_CUR1):     @call SpeakApp::MSG_BRAILLE_KEY_FOCUS(); break;
+      case BRK_MASK(BRK_HOME1):    @call SpeakApp::MSG_BRAILLE_KEY_PSEUDOCUR(); break;
+      case BRK_MASK(BRK_EASTPAD):  @call SpeakApp::MSG_BRAILLE_KEY_KEYS(); break;
+      case BRK_MASK(BRK_NORTHPAD): @call SpeakApp::MSG_BRAILLE_KEY_TITLE(); break;
+      case BRK_MASK(BRK_WESTPAD):  @call SpeakApp::MSG_BRAILLE_KEY_STATUS(); break;
+      case BRK_MASK(BRK_SOUTHPAD): @call SpeakApp::MSG_BRAILLE_KEY_APPKEYS(); break;
+
+      case BRK_MASK(BRK_RIGHT) | BRK_MASK(BRK_CUR1): 
+        BrailleToggleCursor(chord==brPrevChord); 
+        brLinePending = TRUE;           // Update when we get the chance
+        @send,forceQueue SpeakApp::MSG_MAPP_SYNTH_ALBRAILLE_SERIAL();
+        break;
+      case BRK_MASK(BRK_BEAR) | BRK_MASK(BRK_FEAR):
+        @call SpeakApp::MSG_MAPP_BRING_TO_FRONT(0);
+        break;
+      
+      case BRK_MASK(BRK_UPPAD):
+        cs = CS_CONTROL;  key = VC_UP;     shift = 0; break;
+      case BRK_MASK(BRK_DOWNPAD):
+        cs = CS_CONTROL;  key = VC_DOWN;   shift = 0; break;
+      case BRK_MASK(BRK_LEFTPAD):
+        cs = CS_CONTROL;  key = VC_LEFT;   shift = 0; break;
+      case BRK_MASK(BRK_RIGHTPAD):
+        cs = CS_CONTROL;  key = VC_RIGHT;  shift = 0; break;
+      case BRK_MASK(BRK_BTAB):
+        cs = CS_CONTROL;  key = VC_TAB;    shift = SS_LSHIFT; break;
+      case BRK_MASK(BRK_FTAB):
+        cs = CS_CONTROL;  key = VC_TAB;    shift = 0; break;
+      case BRK_MASK(BRK_UP):
+        cs = CS_CONTROL;  key = VC_UP;     shift = SS_LCTRL; break;
+      case BRK_MASK(BRK_DOWN):
+        cs = CS_CONTROL;  key = VC_DOWN;   shift = SS_LCTRL; break;
+      case BRK_MASK(BRK_BEAR):
+        cs = CS_CONTROL;  key = VC_HOME;   shift = 0; break;
+      case BRK_MASK(BRK_FEAR):
+        cs = CS_CONTROL;  key = VC_END;    shift = 0; break;
+    }
+  
+    if(key)                             // Convert to simulated keystroke?
+      SynthesizeKey(cs, key, shift);
+   
+    brPrevChord = chord;
+}
+
+static void ALBrailleHandleKey(byte group, byte key)
+{
+    int i;
+
+    /* Special handling for routing keys (TCx) */
+    if(group==AL_GROUP_TC && !(key & AL_RELEASE_FLAG))
+    {
+      @call SpeakApp::MSG_BRAILLE_KEY_ROUTING(key);
+      return;
+    }
+
+    /* Find key on braille keyboard that this code is for */
+    for(i=0; i<sizeof(brALKeyTable)/sizeof(brALKeyTable[0]); i++)
+      if(group==brALKeyTable[i].group && 
+         (key & ~AL_RELEASE_FLAG)==brALKeyTable[i].code)
+      {
+        /* Update lists of currently pressed keys */
+        if(key & AL_RELEASE_FLAG)
+          brPressedKeys &= ~BRK_MASK(brALKeyTable[i].flag);
+        else
+        {
+          brPressedKeys |= BRK_MASK(brALKeyTable[i].flag);
+          brChordKeys |= BRK_MASK(brALKeyTable[i].flag);
+        }
+        break;
+      }
+
+    if(!brPressedKeys && brChordKeys)
+    {
+      ALBrailleHandleChord(brChordKeys); // handle completed chord  
+      brChordKeys = 0;                   // chord has been handled
+    }
+
+#ifdef LOG
+    if(brPressedKeys)
+      LogPrintf("pressed: %08lx\r\n", brPressedKeys);
+#endif    
+}
+
+static void ALBrailleHandleOldReply(void)
+{
+    const byte reply_id[] = AL_REPLY_ID;
+    const byte get_config[] = AL_CODE_GET_CONFIG;
+
+    brState = BR_IDLE;                  // Reply was handled
+
+    /* Received ID byte reply? */
+    if(brALReplyPos >= sizeof(reply_id)+2 &&
+       memcmp(brALReplyBuf, reply_id, sizeof(reply_id))==0)
+    {
+      switch(brALReplyBuf[sizeof(reply_id)])
+      {
+        case 0x00: brStatus = 3;  G_brailleWidth = 20;  break; // ABT320
+        case 0x01: brStatus = 3;  G_brailleWidth = 40;  break; // ABT340
+        case 0x02: brStatus = 5;  G_brailleWidth = 40;  break; // ABT34D
+        case 0x03: brStatus = 5;  G_brailleWidth = 80;  break; // ABT380
+        case 0x04: brStatus = 5;  G_brailleWidth = 80;  break; // ABT382
+        case 0x0A: brStatus = 3;  G_brailleWidth = 20;  break; // AD420
+        case 0x0B: brStatus = 5;  G_brailleWidth = 40;  break; // AD440
+        case 0x0C: brStatus = 5;  G_brailleWidth = 40;  break; // AD44D
+        case 0x0D: brStatus = 5;  G_brailleWidth = 80;  break; // AD480
+        case 0x0E:                                             // Sat 544
+        case 0x0F:                                             // Sat 570
+          /* Satellite: use enhanced return code for getting config */
+          BrailleWriteString(get_config, sizeof(get_config));
+          G_brailleWidth = 0;
+          brState = BR_AWAITING_NEW_REPLY;
+          break; 
+        default:
+          G_brailleWidth = 0;
+      }
+    }    
+}
+
+static void ALBrailleHandleNewReply(void)
+{
+    if(brALReplyFun==0x07)              // terminal config reply
+    {
+      if(brALReplyPos==4)               // we only understand this format
+      {
+        brStatus = brALReplyBuf[2];     // get display dimensions from reply
+        G_brailleWidth = brALReplyBuf[3];
+      }
+    }
+}
+
+@extern method SpeakApplicationClass, MSG_MAPP_SYNTH_ALBRAILLE_SERIAL
+{
+    byte c;
+
+    if(!brSerialDriver) return;         // Ignore if message is stale...
+    
+    /* Process the characters we can grab */
+    while(BrailleReadByte(&c))
+    {
+      /* Collect reply once we have found the starting character */
+      if(brState==BR_AWAITING_REPLY && (brALReplyPos>0 || c==AL_REPLY_START))
+      {
+        /* Put reply bytes into buffer (while there is room...) */
+        if(brALReplyPos<sizeof(brALReplyBuf))
+          brALReplyBuf[brALReplyPos++] = c;
+
+        /* Finished reply? */
+        if(c==AL_REPLY_END)
+        {
+          ALBrailleHandleOldReply();    // Handly old-style ASCII reply
+        }
+      }
+      else
+      {
+        // Everything else is a key code, which means that it is to
+        // be interpreted in character pairs: (group,key)
+        // This includes all enhanced Satellite return codes
+        if((brState==BR_IDLE || brState==BR_AWAITING_NEW_REPLY) && AL_IS_GROUP(c))
+        {
+          brALKeyGroup = c;
+          brState = (brState==BR_IDLE)? BR_AWAITING_KEY : BR_AWAITING_REPLY_KEY;
+        }
+        else
+        {
+          brState = (brState==BR_AWAITING_KEY)? BR_IDLE : BR_AWAITING_NEW_REPLY;
+          if(brALKeyGroup==AL_GROUP_REP_START)
+          {
+            brALReplyLen = -1;          // expect length byte for packet
+            brALReplyFun = c;           // start code specifies function number
+          }
+          else if(brALKeyGroup==AL_GROUP_REP_DATA)
+          {
+            if(brALReplyLen==-1)        // length of packet unknown?
+            {
+              /* First pseudo-keycode specifies length of following reply */
+              brALReplyLen = c;
+              brALReplyPos = 0;
+            }
+            else if(brALReplyLen)       // are we collecting a reply packet?
+            {
+              if(brALReplyPos<sizeof(brALReplyBuf))
+                brALReplyBuf[brALReplyPos++] = c;            
+
+              if(--brALReplyLen==0)     // received last byte: process reply
+              {
+                ALBrailleHandleNewReply();
+                brState = BR_IDLE;      // nothing more expected
+              }
+            }
+          }
+          else
+          {
+            /* Second character completes the group */
+            ALBrailleHandleKey(brALKeyGroup, c);          
+          }
+        }
+      }
+    }
+
+    /* Do we have a pending update? Execute it when we get ready */
+    if(brState==BR_IDLE && brLinePending)
+    {
+      if(G_brailleWidth)                // do we know the display?
+      {
+        byte pre[] = {AL_CODE_WRITE1, AL_CODE_WRITE2, 0, 0};
+        const byte post = AL_CODE_WRITE_POST;
+
+        /* Set width - start position is always 0 (send entire line) */
+        pre[3] = brStatus + G_brailleWidth;
+
+        /* Send line to display */
+        BrailleSendLine(pre, sizeof(pre), &post, 1);
+        brLinePending = FALSE;
+      }
+      else
+      {
+        const byte get_id[] = AL_CODE_GET_ID;
+
+        /* First identify display */
+        BrailleWriteString(get_id, sizeof(get_id));
+        brState = BR_AWAITING_REPLY;
+        brALReplyPos = 0;
+      }
+    }
+}
+
+void SpeakSentenceALBraille(byte *buf)
+{    
+    if(BrailleUpdate(buf))              // See if display needs an update
+    {
+      brLinePending = TRUE;             // Update when we get the chance
+      @send,forceQueue SpeakApp::MSG_MAPP_SYNTH_ALBRAILLE_SERIAL();
+    }
+}

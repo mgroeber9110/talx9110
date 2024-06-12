@@ -1,0 +1,379 @@
+@include <stdapp.goh>
+@include <foam.goh>
+#include <streamC.h>
+
+#include <ansi/stdio.h>
+#include <ansi/string.h>
+
+@include "common.goh"
+#include "macroeng.h"
+
+#include "brail_ht.h"
+
+
+@extern object SpeakApp;
+
+static Boolean brNewProt, brBookworm;
+
+
+// Specific states for HT Braille implementation (brState)
+#define BR_AWAITING_RESET_REPLY   1
+#define BR_AWAITING_TYPE          2
+#define BR_AWAITING_LINE_ANSWER   3
+#define BR_AWAITING_LINE_ANSWER2  4
+
+
+void LoadHTBraille(void)
+{
+    Boolean loaded;
+
+    loaded = BrailleLoad();             // Attempt to initialize common braille
+
+    if(loaded)
+    {
+      /* Set format used by Speechbox */
+      SerialSetFormat(brSerialDriver, BRAILLE_PORT, HT_FORMAT, SM_RAW, HT_BAUD);
+
+      /* Enable notification on incoming data */
+      StreamSetMessageNotify(brSerialDriver, BRAILLE_PORT,
+        ((1 << STREAM_TYPE_READER_OFFSET) |
+	     (STREAM_EVENT_DATA << STREAM_TYPE_EVENT_OFFSET) |
+	     (STREAM_MODE_MESSAGE << STREAM_TYPE_HOW_OFFSET)),
+        MSG_MAPP_SYNTH_HTBRAILLE_SERIAL, @SpeakApp);
+
+      /* Initialize protocol state */
+      brLinePending = FALSE;
+      brPressedKeys = brChordKeys = brPrevChord = 0;
+      brTypewriter = FALSE;
+
+      /* Initialize protocol by clearing display */
+      SpeakSentenceHTBraille((byte *)"");
+    }
+}
+
+void UnloadHTBraille(void)
+{
+    if(brState!=BR_ERROR)
+    {
+      StreamSetNoNotify(brSerialDriver, BRAILLE_PORT,
+        ((1 << STREAM_TYPE_READER_OFFSET) |
+         (STREAM_EVENT_DATA << STREAM_TYPE_EVENT_OFFSET) |
+         (STREAM_MODE_MESSAGE << STREAM_TYPE_HOW_OFFSET)));
+    }
+
+    BrailleUnload();                    // deinitialize generic braille
+}
+
+/* Handle a completed chord */
+static void HTBrailleHandleChord(dword chord)
+{
+      byte cs, key = 0, shift = 0;
+      byte brailleKeys;
+      int i;
+
+      /* Special "typewriter" mode */
+      if(brTypewriter)
+      {
+        brailleKeys = (byte)chord;          // Extract flags for braille typing
+        if(brailleKeys==chord)              // Pressed some?7
+        {
+          for(i=0; i<256 && brCharset[i]!=brailleKeys; i++)
+            ;                               // Look up braille pattern      
+
+          if(i<256)                         // Found it?
+            if(i<32)                        // Control characters
+              SynthesizeKey(CS_BSW, (byte)(i+96), SS_LCTRL);
+            else                            // Ordinary characters
+              SynthesizeKey(CS_BSW, (byte)i, 0);
+
+          return;                           // No further processing
+        }
+        else
+        {
+          switch(chord)
+          {
+            /* ESC+SPACE disables typewriter mode */
+            case CHRD | BRK_MASK(BRK_NLEFT):
+              brTypewriter = FALSE;
+              UserStandardSound(SST_CUSTOM_NOTE, 880, 5);
+              return;                       // No further processing
+
+            /* Backspace/Space/Enter */
+            case CHRD:
+              SynthesizeKey(CS_BSW, ' ', 0);
+              return;                       // No further processing
+            case BRK_MASK(BRK_NLEFT):
+              SynthesizeKey(CS_CONTROL, VC_BACKSPACE, 0);
+              return;                       // No further processing
+            case BRK_MASK(BRK_NRIGHT):
+              SynthesizeKey(CS_CONTROL, VC_ENTER, 0);
+              return;                       // No further processing
+          }
+        }
+
+        /* If ESC or ENTER were pressed with other keys, the chord
+           is treated as the corresponding chord without these
+           keys in the non-typewriter mode. */
+        chord &= ~(BRK_MASK(BRK_NRIGHT) | BRK_MASK(BRK_NLEFT));
+      }
+
+      switch(chord)
+      {
+        /* ESC+SPACE enables typewriter mode */
+        case CHRD | BRK_MASK(BRK_NLEFT):
+          brTypewriter = TRUE;
+          UserStandardSound(SST_CUSTOM_NOTE, 880, 15);
+          break;
+
+        case BRK_MASK(BRK_Left) | BRK_MASK(BRK_Right):
+          @call SpeakApp::MSG_BRAILLE_KEY_FOCUS();
+          break;
+
+        case BRK_MASK(BRK_Left):
+          @call SpeakApp::MSG_BRAILLE_KEY_LEFT(); 
+          break;
+        case BRK_MASK(BRK_Right):
+          @call SpeakApp::MSG_BRAILLE_KEY_RIGHT();
+          break;
+        case BRK_MASK(BRK_NLEFT):
+          cs = CS_CONTROL;  key = VC_F4;     shift = 0; break;
+        case BRK_MASK(BRK_NRIGHT):
+          cs = CS_CONTROL;  key = VC_F1;     shift = 0; break;
+        case CHRD | BRK_MASK(BRK_NRIGHT) | BRK_MASK(BRK_NLEFT):
+          cs = CS_BSW;      key = ' ';       shift = SS_LCTRL; break;
+
+        case BRK_MASK(BRK_b1): @call SpeakApp::MSG_BRAILLE_KEY_FOCUS(); break;
+        case BRK_MASK(BRK_b2): @call SpeakApp::MSG_BRAILLE_KEY_PSEUDOCUR(); break;
+        case BRK_MASK(BRK_b3): @call SpeakApp::MSG_BRAILLE_KEY_KEYS(); break;
+        case BRK_MASK(BRK_b4): @call SpeakApp::MSG_BRAILLE_KEY_TITLE(); break;
+        case BRK_MASK(BRK_b5): @call SpeakApp::MSG_BRAILLE_KEY_ATTRIB(); break;
+        case BRK_MASK(BRK_b6): @call SpeakApp::MSG_BRAILLE_KEY_STATUS(); break;
+        case BRK_MASK(BRK_b7): 
+          BrailleToggleCursor(chord==brPrevChord); 
+          brLinePending = TRUE;           // Update when we get the chance
+          @send,forceQueue SpeakApp::MSG_MAPP_SYNTH_HTBRAILLE_SERIAL();
+          break;
+        case BRK_MASK(BRK_b8): @call SpeakApp::MSG_BRAILLE_KEY_APPKEYS(); break;
+        case CHRD | BRK_MASK(BRK_NRIGHT):
+          @call SpeakApp::MSG_BRAILLE_KEY_MARK_ROUTING(); break;
+
+        // Chord-hotkeys for Braille Wave-like behavior
+        case CHRD | DOT7:
+          cs = CS_CONTROL;  key = VC_LEFT;   shift = 0; break;
+        case CHRD | DOT8:
+          cs = CS_CONTROL;  key = VC_RIGHT;  shift = 0; break;
+        case CHRD | DOT1|DOT2|DOT3:
+          cs = CS_BSW;      key = 'h';       shift = SS_LCTRL; break;
+        case CHRD | DOT4|DOT5|DOT6:
+          cs = CS_BSW;      key = 'e';       shift = SS_LCTRL; break;
+        case CHRD | DOT3:
+          cs = CS_CONTROL;  key = VC_LEFT;   shift = SS_LCTRL; break;
+        case CHRD | DOT6:
+          cs = CS_CONTROL;  key = VC_RIGHT;  shift = SS_LCTRL; break;
+        case CHRD | DOT1:
+          cs = CS_CONTROL;  key = VC_UP;     shift = 0; break;
+        case CHRD | DOT4:
+          cs = CS_CONTROL;  key = VC_DOWN;   shift = 0; break;
+        case CHRD | DOT3|DOT7:
+          cs = CS_CONTROL;  key = VC_HOME;   shift = 0; break;
+        case CHRD | DOT6|DOT8:
+          cs = CS_CONTROL;  key = VC_END;    shift = 0; break;
+        case CHRD | DOT4|DOT5:
+          cs = CS_CONTROL;  key = VC_BACKSPACE; shift = 0; break;
+        case CHRD | DOT2:
+          cs = CS_CONTROL;  key = VC_UP;     shift = SS_LCTRL; break;
+        case CHRD | DOT5:
+          cs = CS_CONTROL;  key = VC_DOWN;   shift = SS_LCTRL; break;
+        case CHRD | DOT2|DOT3:
+          cs = CS_CONTROL;  key = VC_TAB;    shift = SS_LSHIFT; break;
+        case CHRD | DOT5|DOT6:
+          cs = CS_CONTROL;  key = VC_TAB;    shift = 0; break;
+        
+        // Other keys not availlable on Braille Wave
+        case BRK_MASK(BRK_b9):  cs = CS_CONTROL; key = VC_F1; break;
+        case BRK_MASK(BRK_b10): cs = CS_CONTROL; key = VC_F2; break;    
+        case BRK_MASK(BRK_b11): cs = CS_CONTROL; key = VC_F3; break;    
+        case BRK_MASK(BRK_b12): cs = CS_CONTROL; key = VC_F4; break;
+        case BRK_MASK(BRK_b13): cs = CS_BSW;     key = ' ';   break;
+        case BRK_MASK(BRK_b14): cs = CS_CONTROL; key = VC_ENTER; break;
+        case BRK_MASK(BRK_0):   cs = CS_BSW;     key = '0';   break;
+        case BRK_MASK(BRK_1):   cs = CS_BSW;     key = '1';   break;
+        case BRK_MASK(BRK_2):   cs = CS_BSW;     key = '2';   break;
+        case BRK_MASK(BRK_3):   cs = CS_BSW;     key = '3';   break;
+        case BRK_MASK(BRK_4):   cs = CS_BSW;     key = '4';   break;
+        case BRK_MASK(BRK_5):   cs = CS_BSW;     key = '5';   break;
+        case BRK_MASK(BRK_6):   cs = CS_BSW;     key = '6';   break;
+        case BRK_MASK(BRK_7):   cs = CS_BSW;     key = '7';   break;
+        case BRK_MASK(BRK_8):   cs = CS_BSW;     key = '8';   break;
+        case BRK_MASK(BRK_9):   cs = CS_BSW;     key = '9';   break;
+
+        /* no match - alternative decoding based on braille table */
+        default:
+          if(chord==(CHRD|brCharset['c']))      /* Chord-c: copy */
+          {
+            cs = CS_BSW;      key = 'c';       shift = SS_LCTRL; break;
+          }
+          else if(chord==(CHRD|brCharset['x'])) /* Chord-x: cut */
+          {
+            cs = CS_BSW;      key = 'x';       shift = SS_LCTRL; break;
+          }
+          else if(chord==(CHRD|brCharset['v'])) /* Chord-v: paste */
+          {
+            cs = CS_BSW;      key = 'v';       shift = SS_LCTRL; break;
+          }
+          else if(chord==(CHRD|brCharset['?'])) /* Chord-?: Nokia help */
+          {
+            cs = CS_CONTROL;  key = VC_INS;    shift = 0; break;
+          }
+          else if(chord==(CHRD|brCharset['t'])) /* Chord-t: TALX window */
+          {
+            @call SpeakApp::MSG_MAPP_BRING_TO_FRONT(0);
+          }
+      }
+
+      if(key)                             // Convert to simulated keystroke?
+        SynthesizeKey(cs, key, shift);
+
+      brPrevChord = chord;
+}
+
+static void HTBrailleHandleKey(byte c)
+{
+    int i;
+
+    /* Special handling of Bookworm compound keycodes */
+    if(brBookworm)
+    {
+      /* Search for mapping of key pattern */
+      for(i=0; i<sizeof(brBookwormMap)/sizeof(brBookwormMap[0]); i++)
+      {
+        if(c==brBookwormMap[i].code)    /* Found key? */
+        {
+          /* Routing emulation or regular key? */
+          if(brBookwormMap[i].key==BRK_Routing)
+            @call SpeakApp::MSG_BRAILLE_KEY_ROUTING(0);
+          else
+            HTBrailleHandleChord(BRK_MASK(brBookwormMap[i].key));
+          break;
+        }
+      }
+      return;
+    }
+
+    /* Special handling for routing keys */
+    if(c>=HT_CODE_ROUTING1 && c<=HT_CODE_ROUTING80)
+    {
+      @call SpeakApp::MSG_BRAILLE_KEY_ROUTING(c - HT_CODE_ROUTING1);
+      return;
+    }
+
+    /* Find key on braille keyboard that this code is for */
+    for(i=0; i<sizeof(brKeyTable)/sizeof(brKeyTable[0]); i++)
+      if((c & ~HT_CODE_RELEASE_FLAG)==brKeyTable[i].code)
+      {
+        /* Update lists of currently pressed keys */
+        if(c & HT_CODE_RELEASE_FLAG)
+          brPressedKeys &= ~BRK_MASK(brKeyTable[i].flag);
+        else
+        {
+          brPressedKeys |= BRK_MASK(brKeyTable[i].flag);
+          brChordKeys |= BRK_MASK(brKeyTable[i].flag);
+        }
+        break;
+      }
+
+    if(!brPressedKeys && brChordKeys)
+    {
+      HTBrailleHandleChord(brChordKeys); // handle completed chord  
+      brChordKeys = 0;                   // chord has been handled
+    }
+
+#ifdef LOG
+    if(brPressedKeys)
+      LogPrintf("pressed: %08lx\r\n", brPressedKeys);
+#endif
+}
+
+@extern method SpeakApplicationClass, MSG_MAPP_SYNTH_HTBRAILLE_SERIAL
+{
+    byte c;
+
+    if(!brSerialDriver) return;         // Ignore if message is stale...
+    
+    /* Process the characters we can grab */
+    while(BrailleReadByte(&c))
+    {
+      switch(brState)
+      {
+        case BR_AWAITING_RESET_REPLY:
+          if(c==HT_CODE_RESET_REPLY)    // Got right reply?
+            brState = BR_AWAITING_TYPE; // Wait for next character
+          break;
+        
+        case BR_AWAITING_TYPE:
+          brBookworm = brNewProt = FALSE;
+          switch(c)
+          {
+            case 0x80: brStatus = 4; G_brailleWidth = 20; break;
+            case 0x88: brStatus = 4; G_brailleWidth = 80; break;
+            case 0x89: brStatus = 4; G_brailleWidth = 40; break;
+            case 0x90: brStatus = 0; G_brailleWidth =  8; 
+                       brNewProt = TRUE;  brBookworm = TRUE; break; // Buchwurm, new protocol
+            case 0x01: brStatus = 0; G_brailleWidth =  8; 
+                       brNewProt = FALSE; brBookworm = TRUE; break; // Buchwurm, old protocol
+            case 0x0A: brStatus = 4; G_brailleWidth = 20; break;
+            case 0x05: brStatus = 0; G_brailleWidth = 40; break; // Braille-Wave
+            case 0x0D: brStatus = 4; G_brailleWidth = 40; break;
+            case 0x0E: brStatus = 4; G_brailleWidth = 60; break;
+            case 0x0F: brStatus = 4; G_brailleWidth = 80; break;
+            default:
+              G_brailleWidth = brStatus = 0;   // Unknown display type
+          }
+          brState = BR_IDLE;            // Unknown display type: don't update
+          break;
+        
+        case BR_AWAITING_LINE_ANSWER:
+          if(c==HT_CODE_LINE_ANSWER)
+            brState = BR_IDLE;
+          else
+            HTBrailleHandleKey(c);      // Allow key to slip in during line transfer
+          break;
+        
+        default:
+          if(c==HT_CODE_RESET_REPLY)    // Display identified itself?
+            brState = BR_AWAITING_TYPE; // Wait for next character
+          else
+            HTBrailleHandleKey(c);
+      }
+    }
+
+    /* Do we have a pending update? Execute it when we get ready */
+    if(brState==BR_IDLE && brLinePending)
+    {
+      if(G_brailleWidth)                // do we know the display?
+      {
+        const byte pre = HT_CODE_LINE;
+        const byte post = HT_CODE_LINE_END;
+
+        /* Send line to display */
+        BrailleSendLine(&pre, 1, brNewProt? &post : NULL, 1);
+        brState = BR_AWAITING_LINE_ANSWER;
+        brLinePending = FALSE;
+      }
+      else
+      {
+        /* First identify display */
+        BrailleWriteByte(HT_CODE_RESET);
+        brState = BR_AWAITING_RESET_REPLY;
+      }
+    }
+}
+
+void SpeakSentenceHTBraille(byte *buf)
+{    
+    if(BrailleUpdate(buf))              // See if display needs an update
+    {
+      brLinePending = TRUE;             // Update when we get the chance
+      @send,forceQueue SpeakApp::MSG_MAPP_SYNTH_HTBRAILLE_SERIAL();
+    }
+}

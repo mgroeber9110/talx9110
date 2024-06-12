@@ -1,0 +1,712 @@
+Speak whatsnew
+--------------
+
+
+--- Version 1.20 ---
+
+
+23.05.02 
+
+ - Copyright auf "2001-2002" aktualisiert
+
+ - Tasten für Sprachwechsel in Lernfunktion
+
+04.03.02
+
+ - Geänderte ALVA-Belegung implementiert
+
+ - Unterstützung für Umrechner
+
+ - Bug: wenn man nach dem Fokussieren eines Textfeldes als erstes
+   Backspace drückt, wird das Feld auf der Zeile nicht aktualisiert
+
+ - Bug: Backspace spricht Buchstaben nur richtig, wenn Buchstabenecho
+   gewählt ist.
+
+ - Umschaltung zwischen mehreren Sprachen
+
+12.01.02
+
+ - Erste Version mit ALVA-Treiber
+
+ - Bug: Cursor auf letztem Statusmodul wenn unsichtbar
+
+
+--- Version 1.10 ---
+
+
+29.11.01
+ 
+ - Auch L auf Titel geht zu Fokus
+
+28.11.01
+
+ - R auf Titel geht zu Fokus
+
+ - Nur ein Doppelpunkt bei Fokus in Listen
+
+ - Routing-Tasten rechts von Softkeys mit Grafik korrigiert
+
+27.11.01
+
+ - "..." wird als "Punkt Punkt Punkt" gesprochen
+
+26.11.01
+
+ - Interaktion zwischen Backspace und wortweisem Sprechen korrigiert
+ 
+ - Underline-Cursor benutzt P78 stat P36
+
+25.11.01
+
+ - Mehrfach-Selektion wird durch "+"/"-" angezeigt statt durch Cursor
+ 
+ - Selektion über Braille möglich mit C-ENTER, Routing
+ 
+ - Optimierte Codesegment-Aufteilung im Speicher
+
+ - Routing-Taste hinter Zeilenende positioniert ans Zeilenende
+
+ - Z,Shift-Cursor ab liest markierten Text, falls vorhanden
+   (im Moment nur die ersten 256 Zeichen)
+
+ - Paßwort-Buchstaben werden als "*" gezeigt und angesagt
+
+ - Routing-Tasten bei Focus wirken wie F1 statt Enter
+
+ - Gelöschtes Zeichen bei Backspace wird gelesen
+
+ - Grafiken/Buttons in WAP werden als "[Bild]" dargestellt
+ 
+ - Korrigierte Behandlung langer Softkey-Zeilen
+
+ - SPACE+ENTER+ESC selektiert in Listen (wie Ctrl-Space)
+
+ - Verzeichniswechsel mit "Schließen" wird auch in Braille erkannt
+ 
+ - Durchlaufen einer Liste mit R: automatischer Sprung zum Zeilenanfang
+
+ - Braillezeile wird beim Umklappen korrekt aktualisiert
+ 
+ - Möglicher Überlauf bei großen Objektbäumen beseitigt
+ 
+ - Seite im WAP-Browser wird als Objekt-Baum angezeigt
+
+16.11.01
+
+ - Braille: Cursor auf/ab funktioniert auch im Kalender
+
+ - Neue Braille-Tasten: C-P23/C-P56 für Tab, C-P2/C-P5 für Ctrl-Auf/Ab
+
+ - Zweiter Text in Progress-Dialog kann gelesen werden
+
+ - Apostroph als Worttrennung, falls Wort sonst nicht gefunden
+
+ - Zahlen als Worttrennung, falls Wort sonst nicht gefunden
+
+ - Texte auf Braillezeile sind lokalisierbar
+
+ - Unbekannte Zeichen werden in Braille als "?" angezeigt
+
+ - Bestätigungs-Dialoge bei "Schließen" und "Autostart aus"
+
+ - Bug beseitigt: Lernmodus in Braille zeigt Resource-IDs an
+
+03.11.01
+
+ - Fehlerhafte Benutzung von 386-Opcodes beseitigt (Versionen seit 30.09.01)
+
+02.11.01
+
+ - Braille: Anzeige von Selektionen
+
+ - Bei Mehrfach-Auswahlboxen zeigt ":"-Zeichen den Selektionszustand
+   an (Cursor oder Selektion)
+
+ - Altes Timing bei Sprache wiederhergestellt
+
+ - Sprache wird unterdrückt, wenn noch Messages in der Queue warten
+
+29.10.01
+
+ - Routing in Textfeldern
+ 
+ - Unterstützung von Mehrfach-Selektion in Sprachausgabe
+
+ - Chord-Funktionen für wortweises Springen und Zeilenanfang-/ende
+
+26.10.01
+
+ - Bugfix: Seltener Stack Overflow bei Braille-Ausgabe
+
+ - Korrigierte Auswertung der Buchwurm-Tastencodes
+
+        K1 = L
+        K2 = B1
+        K3 = Routing mit Knopf 1
+        K4 = R
+        K1+K2 = B2
+        K3+K2 = B4
+        K4+K1 = B6
+        K4+K2 = B5
+        K4+K2+K1 = B7
+
+22.10.01
+
+ - C-? ruft Nokia-Hilfe auf
+
+ - C-t ruft TALX-Fenster auf
+
+ - ESC oder Enter mit anderen Funktionstasten im Braille-Eingabemodus
+   führt Tastenfunktion im Normalbetrieb aus
+
+ - Erkennung von Progress-Dialogen und Anzeige durch Tonsignal
+
+ - Neue Tastenbelegung
+        B1 = Focus
+        B2 = Lese-Cursor
+        B3 = Soft-Keys
+        B4 = Fenstertitel
+        B6 = Statusanzeige
+        B7 = Cursor-Wechsel:
+        B8 = Applikationstasten
+
+ - Applikationstasten enthält auch "Chr"
+
+ - Umschalten auf Underline-Cursor (P36) möglich
+
+ - Braille-Fenster wird mitgeführt, wenn der Cursor den Rand überschreitet
+
+
+30.09.01 / 02.10.01
+
+ - BrailleWave-Tastencodes ergänzt:
+   C-P7, C-P8, C-P123, C-P456, C-P3, C-P6, C-P1, C-P4, C-P37, C-P68, C-P45,
+   C-P14, C-P1346, C-P1236
+
+ - Control-Codes können über Braille eingegeben werden
+
+ - Neues Buchwurm-Protokoll korrigiert
+
+ - Mit Z+Extras kann zwischen dem letzten externen Gerät und der internen
+   Sprache umgeschaltet werden. "Sprache aus" zählt ebenfalls als externes
+   Gerät.
+
+ - Datei-Information-Fenster (Ctrl-I in Dateiauswahl) wird angesagt
+
+ - Sprechen langer Texte funktioniert wieder mit externer Sprache.
+
+
+------------------------------------------------------------------------------
+
+
+17.03.01:
+
+ - Interne Sprache: Lautstärke
+
+ - Interne Sprache: Laufende Ausgabe wird bei Tastendruck gestoppt
+   (Verzögerung durch Message-Queue)
+
+ - Compilieren mit Standard-SDK wieder möglich
+
+ - Interne Sprache: Ausgabe wird nicht versucht, wenn Telefon abgeschaltet
+
+ - Backlight-Taste (unten links) bringt TALX in den Vordergrund
+
+ - "Text" bei nicht-editierbarem Feld nicht mehr angesagt, dafür aber auch bei
+   einem noch leeren Eingabefeld
+
+ - Eingegebene Buchstaben werden angesagt
+
+ - Leere Tasten bei ankommendem Anruf werden nicht mehr gesprochen
+
+ - Serieller Port wird erst zwei Sekunden nach dem letzten gesprochenen String
+   geschlossen
+
+ - In kombiniertem Eingabe-/Listenfeld wird der aktuell selektierte Eintrag
+   nach einem Tastendruck angesagt, wenn er sich geändert hat.
+
+ - Kalender-Tagesansichten und Todo-Liste werden unterstützt
+
+ - Als Titel des "Kontakte"-Hauptfensters wird der Applikationsname benutzt
+
+ - Als Titel des Kalenderfensters wird der aktuelle Tag angesagt
+
+ - Strings werden über allgemeines "Suchen und Ersetzen" vorbehandelt (z.B.
+   "Kurzmitt." = "Kurzmitteilung")
+
+
+20.03.01:
+
+ - Speechbox: Workaround für ":171"-Problem
+
+ - Veränderte Erkennung von Fenstertiteln (z.B. Fax/Einstellungen/Logo-Datei)
+
+ - Interne Sprache: Ausgabe wird bei Tastendruck wesentlich schneller abgebrochen
+
+ - Select-Button auf dem "Zubehör"-Schirm wird erkannt
+
+ - Tab/Shift-Tab wird gesprochen
+
+ - Selektierter Text in nicht editierbaren Feldern wird vorgelesen
+
+
+03.04.01:
+
+ - Titel einer SMS/Mail wird wieder gesprochen
+
+ - Als "***" formatierter Text wird durch Platzhalter "{Secret}" ersetzt
+
+ - Satzzeichen werden gesprochen
+
+ - Interne Sprache: automatischer Abgleich mit speaklst-Worten
+
+ - Serieller Port wird bei externer Sprache zuverlässiger geschlossen
+
+ - Interne Sprache: Bessere CRC für Worterkennung
+
+ - Bitmap-Erkennung (implementiert für +/- in Alarm und für Verzeichnis-Icon)
+
+
+14.04.01:
+
+ - Titel des Menüs im SMS-Editor wird wieder erkannt
+
+ - Neue Option: wortweises Sprechen gedrückter Tasten
+
+ - Interne Sprache wird bei Schließen des Geräts abgeschaltet
+
+ - Neue/geänderte Tastenfunktionen (B=obere Taste, Z=untere Taste):
+     B, B: Beleuchtung wie B ohne TALX
+     B, Z: Zoomen, wie Z ohne TALX
+     Z, Z: Fenster lesen, wie jetzt mit Z
+     Z, B: TALX-Fenster focussieren, wie jetzt B
+     Z, T1: Hilfe des Communicators aufrufen, wie Chr-I
+
+     Z, Cursor Auf: Aktuelle Zeile vorlesen
+     Z, Cursor Rechts: Aktuelles Wort vorlesen
+     Z, Cursor Links: Aktuelles Zeichen vorlesen
+     Z, Cursor Ab: Text ab Cursor mit virtuellem Cursor vorlesen
+
+     Cursor Links/Rechts: Zeichen vorlesen, auf dem der Cursor landet
+     Cursor Ab/Auf: Zeile vorlesen, auf der der Cursor landet
+     Ctrl-Links/Rechts: Wort vorlesen, auf dem der Cursor landet
+
+ - Titelansage im Fenster "Sie haben" (eingegangene Nachrichten) korrigiert
+
+
+17.04.01:
+
+ - Bug: Bei leeren Textfeld wird der Name des Feldes als Inhalt wiederholt
+
+ - Bug: Wortweises Sprechen bricht bei Umlauten ab
+
+ - Neue/geänderte Tastenfunktionen (B=obere Taste, Z=untere Taste):
+     Z, T4: Indikator (Batteriestatus, Netzstärke usw.) ansagen
+
+ - Bug: Kurzwahl wird nicht angesagt, nachdem sie definiert wurde
+
+ - Interne Sprache: Worte aus Hilfetexten ergänzt
+
+
+24.04.01:
+
+ - IMEI-basierte Seriennummern. Falls die IMEI nicht automatisch erkannt
+   wird (beim Aufklappen des Deckels), kann in der aktuellen Version mit
+   der "Register"-Taste im TALX-Bildschirm die Überprüfung erzwungen
+   werden. Wenn noch keine Seriennummer bekannt ist, wird sie erfragt.
+
+ - Lautstärke-Einstellung für externe Sprachausgabe
+
+ - Bug u.a. in Telefonliste: Bei Pfeiltasten wurde nur das Textfeld gelesen
+
+ - Zuästzliche Möglichkeit, Texte wort- und buchstabenweise zu sprechen
+
+ - Neue/geänderte Tastenfunktionen (B=obere Taste, Z=untere Taste):
+     Z, M: Tastenhilfe (jede Taste spricht, hat aber keine Funktion) ein/aus
+
+ - Namen von zusätzlichen Tasten werden gesprochen
+ 
+ - TALX versucht nicht mehr, den eigenen Startbildschirm zu sprechen (was
+   bei ausgeschaltetem Telefon nach einem Reboot sowieso meist erfolglos
+   bleibt). Das sollte die Betriebssicherheit beim Betrieb als
+   Autostart-Applikation verbessern.
+
+ - Tastenklicks auch für Hotkeys
+
+
+26.04.01:
+
+ - Pause nach buchstabiertem Wort geht jetzt
+
+ - Einzelne Tasten (Cursorsteuerung, Umschalttasten) sprechen im normalen
+   Betrieb nicht mehr (nur noch im Trainingsmodus).
+
+ - Umlaute und 's werden für interne Sprache normalisiert
+
+ - Bug: "Taste 1" bis "Taste 4" sprechen jetzt auch die Zahl sofort
+
+
+30.04.01
+
+ - Registrierte Version trägt sich selbst für Autostart ein
+
+ - Interne Sprache: Buchstabieren von a-Umlaut korrigiert
+
+ - Interne Sprache: Bug: zufällige Buchstaben bei abgeschaltetem
+   wortweisem Sprechen ("Other" oder "Letters")
+
+ - Interne Sprache: Ringtone-Namen und Top-2000 Worte aus Liste ergänzt
+
+ - Interne Sprache: Dateiformat und Speicherverwaltung für große
+   Wörterbücher (bis 4MB) erweitert
+
+
+30.04.01 (b):
+
+ - Lange Texte (z.B. Hilfedateien, WWW-Seiten) werden jetzt mit dem
+   Pseudocursor automatisch gelesen.
+
+ - Satzzeichen werden für die externe Sprache nicht mehr durch Namen
+   ("Punkt", "Doppelpunkt") ersetzt. Dadurch wird die Satzmelodie
+   stark verbessert...
+   
+ - Aktuelle Zeile im Textfeld wird nicht mehr manchmal automatisch
+   gelesen, wenn sich ihr Inhalt geändert hat.
+
+ - Externe Sprache wird gestoppt, wenn eine Taste gedrückt wird.
+
+ - Korrektur unvollständiger Worte am Ende des vorgelesenen
+   Ausschnitts beim Lesen langer Texte.
+
+ - Steuerzeichen (z.B. Trennvorschläge und Grafik-Platzhalter im WWW)
+   werden aus dem Text entfernt, da sie evtl. die Sprachausgabe
+   behindern könnten.
+
+
+03.05.01
+
+ - Vorlesen langer Texte wird auch durch Schließen der Klappe gestoppt.
+
+ - INI-File-Änderung für Autostart wird sofort in den Festspeicher
+   geschrieben, so daß sie nach einem Reboot sicher aktiv ist.
+
+ - Name des Rechner- und Kontakte-Fensters wird wieder angesagt
+
+ - Sonderbehandlung für Rechner, so daß Ergebnis sofort angesagt wird
+
+ - Sonderbehandlung für Wecker (Alarm-Uhrzeit wird gesprochen)
+
+ - Deutsche Benutzeroberfläche von TALX
+
+ - Einzeilige/mehrzeilige Textfelder werden unterschieden ("Text", 
+   "Textfeld")
+
+ - Seriennummern-Prüfung erfolgt jetzt beim Schließen der Klappe und
+   frühestens 90 Sekunden nach dem Booten, um nicht ausführbare
+   IMEI-Abfragen zu vermeiden.
+
+ - Sonderbehandlung für Kalender: Tagestermine in Monatsansicht
+   werden gesprochen
+
+ - Unterdrückung von verspätet gesprochenen Tastendrücken
+
+
+05.05.01
+
+ - Ansage von Großbuchstaben 
+
+ - Verwendung eines Buchstabieralphabets möglich
+
+ - Fehlerton, wenn nicht gesprochen werden kann, weil Telefon aus
+
+ - Genauere Prüfung auf Verfügbarkeit des Telefonteils bei interner
+   Sprache
+
+ - Sprechen bei Wechsel der Funktionstasten und Ansage von Tastendrücken
+   ist im Sprachrecorder abgeschaltet.
+
+ - Beim wortweisen Springen im Text werden Worte mit Bindestrich komplett
+   gelesen.
+
+ - Bei der Eingabe werden Ziffern sofort gesprochen
+
+ - Neue Tasten:
+    - Z,T2: Funktionstasten ansagen
+    - Z,T3: Zuerst Uhrzeit, dann Datum ansagen
+    - Z,Tel: "Tasten ansagen" umschalten
+    - Z,Fax: Ansage von Großbuchstaben umschalten
+    - Z,SMS: Buchstabieralphabet umschalten
+    - Z,Kontakte: Langsamer sprechen
+    - Z,Notizen: Schneller sprechen
+    - Z,Kalender: Leiser sprechen
+    - Z,System: Lauter sprechen
+
+ - Externe Sprache: Tonhöhe, Geschwindigkeit können eingestellt werden
+
+ - "Ungesendete Nachrichten" werden bei Sprechen des Indicators angesagt
+
+ - Wörterbuch um zweistellige Zahlen (und einige größere ergänzt), um
+   Uhrzeiten und Daten besser sprechen zu können.
+
+ - Nach einer Ziffernweise gesprochenen Zahlenfolge wird die Pause
+   unterdrückt, wenn nicht wieder eine Ziffer folgt.
+
+ - Alle geänderten Einstellungen werden sofort abgespeichert (mit Ausnahme
+   des Ausgabegeräts, um sicherzustellen, daß nach einem Neustart immer die
+   interne Sprache verfügbar ist).
+
+ - Falls verfügbar, wird das Vorhandensein eines Menüs angesagt.
+
+ - Fehlende Ansage "Text" bei der Bewegung durch mehrere aufeinanderfolgende
+   Textfelder korrigiert.
+
+
+14.05.01
+
+ - Tastenhilfe fuer Z,T2 und Z,T3 korrigiert.
+
+ - "Fragezeichen" und "sz" in deutscher Sprachbibliothek korrigiert.
+
+ - Einige Worte in der deutschen Bibliothek ergaenzt.
+ 
+ - Trennstrich wird nur noch an Stellen entfernt, wo er wirklich zu
+   erwarten ist. (verbessert "Gross- und Kleinschreibung" bzw.
+   "Gross-/Kleinschreibung"). Korrigiert vielleicht auch
+   Taschenrechner-Fenstertitel
+
+ - Neue Prioritaet fuer Sprachausgabe, so dass sie auch waehrend eines
+   Gespraechs funktioniert.
+
+
+21.05.01
+
+ - Interne Sprache: Deutsche Namen für Sonderzeichen ergänzt
+
+ - Satzzeichen: Auswahl, welche im Fließtext gesprochen werden sollen
+
+ - Minus, Doppelpunkt, Komma und Punkt werden immer angesagt, wenn
+   direkt eine Ziffer folgt
+
+ - Bei eingeschaltetem Tastenecho wird bei schnellem Drücken nur die letzte
+   Taste nachgesprochen.
+
+ - Deutsche Ortsnamen aus Weltzeit-Uhr ergänzt.
+
+ - Neue Tastenfunktionen (wenn kein Textfeld selektiert ist):
+    - Z, Cursor Links: Buchstabiert das aktuell gewählte Objekt
+    - Z, Cursor Auf: Liest das aktuell gewählte Objekt 
+    - Z, Internet: Ansage von Satzzeichen umschalten
+
+ - Bessere Behandlung von geschweiften Klammern, um Verwelchselung mit
+   Platzhaltern auszuschließen.
+
+ - Größen der Textpuffer (z.B. für das Vorlesen von langen Texten) 
+   angepaßt und gegen Pufferüberläufe abgesichert.
+
+ - Englisches TALX-Vokabular aus deutscher Bibliothek entfernt und 
+   umgekehrt.
+
+ - Weltzeitfenster wird vorgelesen.
+
+ - MMC-Grafik wird für Programme/Daten auf Speicherkarte gelesen.
+
+ - Zusätzliche Feldbeschriftungen in Kalender-Detailansicht werden 
+   vorgelesen.
+
+ - Buildnummer im "About"-Bildschirm des 9110 wird vorgelesen.
+
+
+22.05.01
+
+ - Worte ohne Vokale (vor allem Abkürzungen) aus Wörterbuch entfernt
+
+ - Einige kleine Korrekturen im Wörterbuch
+
+ - Fehler in Tastenhilfe für Z+Internet korrigiert
+
+ - Kalender: Fettgedruckte Termine im Monat werden vorgelesen
+
+
+26.05.01
+
+ - Ctrl-N/P wirken als Navigationstasten (d.h. Fensterwechsel wird erkannt)
+
+ - Ganztägige Termine werden in Monatsübersicht erkannt.
+
+ - Großbuchstaben werden bei Cursorbewegung wieder gesprochen
+
+ - Großschreibung und Buchstabieralphabet werden im Lernmodus berücksichtigt.
+
+ - Leerzeichen wird beim zeichenweisen Bewegen gesprochen.
+
+ - Textfeld in Kontakten wird nicht mehr doppelt gesprochen.
+
+ - Kennzeichnung ganztaegiger Termine bei Kalenderübersicht
+
+ - Unterstützung für Chr-Fenster
+
+ - Text "Keine Auswahl" o.ä. bei leeren Listen wird nicht unterdrückt
+
+ - Ctrl-H/E sagen im Text die aktuelle Zeile an
+
+ - Tastenhilfe für Ctrl-H/E/X/C/V/T/D/M
+
+ - Puffergröße für das Vorlesen nicht editerbarer Texte (z.B. Hilfe) vergrößert
+   (sollte die Pausen beim Lesen verringern)
+   
+ - TALX-Infofenster eingebaut
+
+
+01.06.01
+
+ - Bedarf an unbeweglichen Speicherblöcken etwas verringert
+
+ - Optimierung der Segmentgrößen für bessere Speicherausnutzung
+
+ - Apostroph wird gesprochen, "registriert" ergänzt, "de" wird buchstabiert
+
+ - Fragezeichen und andere Satzzeichen werden nicht mehr doppelt gesprochen
+
+ - "ß" wird nicht mehr als "Groß-sz" gesprochen
+
+ - Caps Lock an/aus wird angesagt
+
+ - Taste "Infrarot-Aktivierung" wird angesagt
+
+ - Menü ergänzt: Autostart ein/aus, TALX beenden
+
+ - Bei Stop der Ausgabe mit virtuellem Cursor Wiederholung ab Fragment-Anfang
+
+ - Möglicher Fehler (externe Sprache bleibt stumm) bei Wechsel von interner
+   auf externe Sprache beseitigt
+
+ - Komma, Punkt, Strich, Doppelpunkt werden immer gelesen, wenn kein
+   angrenzendes Zeichen ein Buchstabe ist
+
+ - Sprachausgabe sollte nicht starten, wenn Telefon geschlossen
+
+
+03.06.01
+
+ - Möglicherweise fehlerhafte Sprachausgabe im ersten Dialog nach dem
+   Start (z.B. IMEI) beseitigt
+
+ - Telefon-Fenster während eines Anrufs wird korrekt gelesen, auch wenn
+   mehrere Anrufe gleichzeitig aktiv sind.
+
+ - Abkürzungen für deutsches Kontakte-Log und Fax ergänzt
+
+ - Autostart ein/aus: Menüpunkt-Namen deutlicher gemacht
+ 
+ - Deadlock in Fax-Dateianzeige beseitigt
+
+ - Einträge in Visitenkarten-Liste und "Inhalt der SIM-Karte" werden gelesen
+ 
+ - In Weltzeit-Ortsliste wird der Titel nicht mehr bei jedem Eintrag gelesen
+
+ - Listen mit Textfeld (z.B. Weiterleiten in Fax): Textfeld-Label wird gelesen
+
+ - Titel der Tagesübersicht wird wieder gelesen
+
+ - Überschriften der Kontaktlog-Tabelle wird nicht mehr gelesen
+
+ - Unverwechselbarer Signalton, wenn TALX nicht sprechen kann
+
+ - Satzzeichen werden nicht mehr gesprochen, wenn Echo ganz aus
+
+
+07.06.01
+
+ - Sonderbehandlung für Beleuchtungsdauer und Bildschirmschoner-Wartezeit
+
+ - Trennstrich wird auch in Fenstern beseitigt, deren Namen vom
+   Applikationsnamen abgeleitet ist (Taschenrechner)
+
+ - Besserer Schutz gegen abgebrochene Sprache, wenn Tasten schnell
+   hintereinander gedrueckt werden
+
+ - Sprache wird vor dem Beenden abgeschaltet, um Abstürze zu vermeiden
+
+ - Kalender/Einzelheiten/Erinnerung: Minuten-Text wird angesagt
+
+ - Abkuerzung "Gegenst." ergaenzt
+
+ - "Textfeld" in Tagesuebersicht wird angesagt
+
+ - Sommerzeit wird in Weltzeituhr angesagt
+
+
+25.06.01
+
+ - Benutzeroberfläche komplett (bis auf Copyright/Version) durch
+   speaklst übersetzbar. Ein Backslash in einem der Ersatz-Strings
+   bewirkt einen Zeilenumbruch (nicht überall verwendbar).
+
+ - Timer-Behandlung für externe und interne Sprache getrennt. Dadurch
+   sollten gelegentliche "Hänger" beim Wechsel auf externe Sprache
+   endgültig beseitigt sein.
+
+ - Die speaklst-Datei benutzt den Windows/ANSI-Zeichensatz. Einzige 
+   Ausnahme sind "\x"-Escapes, die in der linken Spalte verwendet werden 
+   können, um den Hexcode eines einzelnen Zeichens im Geos-Zeichensatz
+   anzugeben.
+
+ - Signalton auch, wenn Sprache wegen Datenanruf unterdrückt wird.
+
+ - Unterstützung für mehrere Sprachbibliotheken (alle Files mit
+   Namen "speaklib*")
+
+
+30.06.01
+
+ - Einfache Braille-Unterstützung
+
+ - Sprachbibliotheken werden aus dem Speicher geworfen, wenn man
+   keine interne Sprache verwendet
+
+
+08.08.01
+ 
+ - Filename der Sprachdatei wird gespeichert, wenn Sprachrecorder
+   benutzt wird.
+
+ - Aufzeichnung von WAV-Files als speak###.wav ist mit Z+1 möglich.
+
+
+18.08.01
+
+ - Tasten auf Braillezeile werden jetzt unterstützt
+
+ - Braillezeile erhält nicht bei jeder Änderung einen Reset
+
+ - Control-Abbruch funktioniert in Sprachrecorder [enthielt Bug, der
+   Control-Abbruch ganz verhindert hat...]
+
+
+03.09.01
+
+ - Control-Abbruch funktioniert wieder
+
+ - Copyright der Lokalisierung wird in About angezeigt
+
+ - Präfix/Postfix für Fenstertitel kann getrennt festgelegt werden
+
+ - Ausgabe wird erst beim Bestätigen gewechselt
+
+ - Ansprechen der Sprache etwas beschleunigt
+
+ - Neue Braille-Darstellung: Wechsel zwischen Fenstertitel, Fokus usw. möglich
+
+
+05.09.01
+
+ - Routing-Tasten selektieren bei Fokus, Funktionstasten, Anwendungstasten
+
+ - Bug: Z+B (Talx aufrufen) spricht einen falschen Tastennamen
+
+ - Verlängerte Erkennung automatisch öffnender Dialogboxen nach einem
+   Tastendruck (15 Sekunden, wobei die Pollrate nach 3 Sekunden reduziert wird)
+
+ - Experimentelle Anzeige von Progress-Dialogen durch Pieptöne (funktioniert
+   noch nicht richtig)

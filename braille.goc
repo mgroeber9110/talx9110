@@ -1,0 +1,310 @@
+@include <stdapp.goh>
+@include <foam.goh>
+
+#include <ansi/stdio.h>
+#include <ansi/string.h>
+
+@include "common.goh"
+
+
+#define BRAILLE_FILE "braille"
+
+#define BRAILLE_BUFSIZE 85
+
+
+/* Variables shared across braille drivers */
+word brState;                           // State of braille protocol
+Boolean brLinePending;                  // Update line once we get the chance
+dword brPressedKeys;                    // Keys that are currently pressed
+dword brChordKeys;                      // Keys that were pressed in current chord
+dword brPrevChord;                      // Keys that were pressed in previous chord
+Boolean brTypewriter;
+
+static Boolean brSerialOpen;
+static byte brCurBuf[BRAILLE_BUFSIZE];  // Currently displayed braille string
+static byte brNewBuf[BRAILLE_BUFSIZE];  // New string to display
+static dword brLastTick;
+static word brCursorPos, brCursorPos2;
+static byte brCursorPattern;
+  #define BR_CURSOR_PAT_OFF   0x00
+  #define BR_CURSOR_PAT_SOLID 0xff
+  #define BR_CURSOR_PAT_UNDER ((1<<6) | (1<<7)) // P78
+  #define BR_CURSOR_PAT_SEL   ((1<<6) | (1<<7)) // P78
+
+GeodeHandle brSerialDriver;
+word G_brailleWidth;
+word brStatus;
+byte brCharset[256];                    // Braille charset to use
+Boolean brCursorChange;
+
+/*
+ ***************************************************************************
+ *              Generic code for Braille output
+ ***************************************************************************
+ */
+
+#ifdef LOG
+void LogPrintf(char *fmt, ...)
+{
+     char buf[512];
+     va_list arg;
+     static FileHandle file = NullHandle ;
+
+     if(!fmt)
+     {
+         if(file) FileClose(file, TRUE);
+         file = NullHandle;
+         return;
+     }
+
+     if (!file)  {
+         FilePushDir();
+         FoamSetDocumentDir(FDD_CREATED_TEXTS);
+         file = FileCreate("talx.log",
+                            FILE_CREATE_TRUNCATE | FCF_NATIVE |
+                            FILE_ACCESS_W | FILE_DENY_RW, 0 );
+         FilePopDir() ;
+     }
+
+     if (file)  {
+         va_start(arg, fmt);
+         vsprintf(buf, fmt, arg);
+         va_end(arg);
+         FileWrite(file, buf, strlen(buf), FALSE);
+     }
+}
+#endif
+
+static void LoadBrailleCharset(void)
+{
+    FILE *f;
+    word i,j;
+    byte by;
+    char line[512];
+  
+    FoamSetDocumentDir(FDD_TONES);
+    f = fopen(BRAILLE_FILE, "r");
+    if(f)
+    {
+      i = 0;
+      while(!feof(f) && fgets(line, sizeof(line), f) && i<256)
+      {
+        by = 0;                         // no dots specified yet
+        for(j=0; line[j]>='1' && line[j]<='8'; j++)
+          by |= 1<<(line[j]-'1');       // set dots as specified
+        brCharset[i++] = by;            // store character in table
+      }
+      fclose(f);
+    }
+    else
+    {
+      memset(brCharset, 0, sizeof(brCharset));
+#ifdef LOG
+      LogPrintf("Can't load braille file\r\n");
+#endif
+    }
+}
+
+Boolean BrailleLoad(void)
+{
+    StreamError err;
+
+    strcpy((char *)brCurBuf, ".");
+    brCursorPos = brCursorPos2 = CURSOR_POS_NONE;
+    brCursorPattern = BR_CURSOR_PAT_SOLID;
+    brCursorChange = FALSE;
+
+    /* Size of display is not known yet, no contact with display so far */
+    G_brailleWidth = 0;
+    brLastTick = 0;
+    
+    LoadBrailleCharset();             // Load charset
+
+    brSerialDriver = SerialLoadDriver();
+
+    err = SerialOpen(brSerialDriver, BRAILLE_PORT, 0, 
+      BRAILLE_IBUF_SIZE, BRAILLE_OBUF_SIZE, 0);
+
+    brSerialOpen = (err==0);
+
+    if(brSerialOpen)
+    {
+      /* Assert DTR, disable flow control */
+      SerialSetFlowControl(brSerialDriver, BRAILLE_PORT, 0, SERIAL_MODEM_DTR, 0);
+
+      brState = BR_IDLE;
+    }
+#ifdef LOG
+    else
+    {
+      LogPrintf("Can't open serial port\r\n");
+
+      brState = BR_ERROR;
+    }
+#endif
+
+    return brSerialOpen;
+}
+
+void BrailleUnload(void)
+{
+    if(brSerialOpen)
+    {
+      /* De-assert DTR */
+      SerialSetModem(brSerialDriver, BRAILLE_PORT, 0);
+
+      SerialClose(brSerialDriver, BRAILLE_PORT, STREAM_DISCARD);
+    }
+
+    GeodeFreeDriver(brSerialDriver);
+    brSerialDriver = NullHandle;
+
+#ifdef LOG
+    LogPrintf(NULL);
+#endif
+}
+
+word BrailleWriteByte(byte by)
+{
+    StreamError ret;
+
+    ret = SerialWriteByte(brSerialDriver, BRAILLE_PORT, STREAM_NO_BLOCK, by);
+    brLastTick = TimerGetCount();       // Store last time we did something
+#ifdef LOG
+    LogPrintf("> %02x", by);
+    if(ret)
+      LogPrintf(" - error: %u\r\n", ret);
+    LogPrintf("\r\n");
+#endif
+    return ret;
+}
+
+word BrailleWriteString(byte *str, word len)
+{
+    StreamError ret;
+    word written;
+
+    ret = SerialWrite(brSerialDriver, BRAILLE_PORT, STREAM_NO_BLOCK, len, str, &written);
+    brLastTick = TimerGetCount();       // Store last time we did something
+#ifdef LOG
+    {
+      word i;
+
+      LogPrintf(">");
+      for(i=0; i<len; i++)
+        LogPrintf(" %02x", str[i]);
+      if(ret || written!=len)
+        LogPrintf(" - error: %u, written: %u/%u", ret, written, len);
+      LogPrintf("\r\n");
+    }
+#endif
+    return ret;
+}
+
+Boolean BrailleReadByte(byte *by)
+{
+    word ret;
+    
+    ret = SerialReadByte(brSerialDriver, BRAILLE_PORT, STREAM_NO_BLOCK, by);
+    if(ret==0)
+    {
+      brLastTick = TimerGetCount();     // Store last time we got a character
+#ifdef LOG
+      LogPrintf("< %02x\r\n", *by);
+#endif
+    }
+    return (ret==0);
+}
+
+void BrailleSendLine(byte *strPre, int nPre, byte *strPost, int nPost)
+{
+    byte pattern[BRAILLE_BUFSIZE], pat;
+    int i,j;
+
+    j = 0;                              // Start at beginning of brCurBuf[]
+    for(i=0; i<brStatus+G_brailleWidth; i++)
+    {
+      if(i<brStatus)                    // Status fields are always empty
+        pat = brCharset[' '];
+      else      
+      {
+        if(brNewBuf[j])                 // More characters in buffer? Add them
+        {
+          pat = brCharset[brNewBuf[j]];
+          if(!pat && brNewBuf[j]!=' ')
+            pat = brCharset['?'];
+          j++;
+        }
+        else
+          pat = brCharset[' '];         // Fill up reset with blanks
+      }
+
+      if(brCursorPos != CURSOR_POS_NONE && 
+         i==brStatus+brCursorPos && brCursorPos==brCursorPos2)
+        pat |= brCursorPattern;
+
+      pattern[i] = pat;
+    }
+
+    /* Superimpose selection cursor if enabled */
+    if(brCursorPattern != BR_CURSOR_PAT_OFF && brCursorPos != brCursorPos2)
+    {
+      for(i=brCursorPos; i<brCursorPos2 && i<G_brailleWidth; i++)
+        pattern[i+brStatus] |= BR_CURSOR_PAT_SEL;
+    }
+
+    /* Send line to display */
+    BrailleWriteString(strPre, nPre);
+    BrailleWriteString(pattern, brStatus+G_brailleWidth);
+    if(strPost)
+      BrailleWriteString(strPost, nPost);
+
+    strcpy((char *)brCurBuf, (char *)brNewBuf);
+}
+
+Boolean BrailleUpdate(byte *buf)
+{
+    strncpy((char *)brNewBuf, (char *)buf, sizeof(brNewBuf)-1);
+    brNewBuf[sizeof(brNewBuf)-1] = 0;
+   
+    if(!strcmp((char *)brNewBuf, (char *)brCurBuf) && !brCursorChange)
+      return FALSE;                     // Ignore if no change
+
+    brCursorChange = FALSE;             // Cursor change has been handled
+
+    if(brState==BR_ERROR)               // Error if port couldn't be opened
+    {
+      /* Use a distinctive tone to avoid confusion with error beep */
+      UserStandardSound(SST_CUSTOM_NOTE, 440, 15);
+      return FALSE;
+    }
+
+    /* Send new line immediately if we are not in the middle of an operation,
+       or if the previous operation appears to have timed out... */
+    if(TimerGetCount() > brLastTick+BRAILLE_TIMEOUT)
+    {
+      G_brailleWidth = 0;
+      brState = BR_IDLE;
+    }
+
+    return TRUE;
+}
+
+void BrailleToggleCursor(Boolean repeat)
+{
+    brCursorPattern =
+      (brCursorPattern == BR_CURSOR_PAT_OFF) ? 
+        BR_CURSOR_PAT_SOLID :
+      (brCursorPattern == BR_CURSOR_PAT_SOLID && repeat) ? 
+        BR_CURSOR_PAT_UNDER :
+        BR_CURSOR_PAT_OFF;
+}
+
+void BrailleSetCursor(word pos, word pos2)
+{
+    /* Set Braille cursor mode for next update */
+    if(brCursorPos != pos || brCursorPos2 != pos2)
+      brCursorChange = TRUE;
+    brCursorPos = pos;
+    brCursorPos2 = pos2;
+}

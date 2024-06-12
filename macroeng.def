@@ -1,0 +1,22 @@
+MacroHotkeyList      struct
+  MHL_keyboardShortcut  KeyboardShortcut
+  MHL_destination       dword   ; should be optr, but needs to be GOC compatible
+  MHL_message           word
+MacroHotkeyList      ends
+
+MACRO_MODE_NORMAL   =	0
+  ; Zoom/Backlight: switch modes to HOTKEY/PASS
+  ; other keys: pass to application, send default message
+
+MACRO_MODE_PASS	    =	1
+  ; all keys: pass to application, don't send default message
+  ; switches back to NORMAL after one keystroke
+
+MACRO_MODE_HOTKEY   =	2
+  ; hotkey from table: don't pass to application, send associated message
+  ; other keys: don't pass to application, don't send message
+  ; switches back to NORMAL after one keystroke
+
+MACRO_MODE_ABSORB   =	3
+  ; all keys: don't pass to application, send default message
+

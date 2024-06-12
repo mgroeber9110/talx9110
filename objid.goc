@@ -1,0 +1,1709 @@
+/* This code runs on a foreign thread */
+#pragma option -WDE
+
+@include <stdapp.goh>
+@include <foam.goh>
+
+#include <ansi/stdio.h>
+#include <ansi/string.h>
+
+@include "common.goh"
+
+
+@prototype optr OL_BUTTON_GET_GEN_PART_MSG() = cx:dx;  
+
+ObjectRefs G_lastObj;
+ObjectRefTexts G_lastObjTexts;
+optr G_lastFocus;
+dword G_pseudoCursorPos, G_oldPseudoCursorPos;
+
+/* Shorthands for common tests on an object */
+#define HasVardata(_obj, _vardata) \
+  (@call _obj::MSG_META_GET_VAR_DATA(_vardata, 0, NULL) != (word)-1)
+#define IsInClass(_obj, _class) \
+  (@call _obj::MSG_META_IS_OBJECT_IN_CLASS(&(_class)))
+
+/* Test if an object is a special one in a particular application */
+Boolean IsHackObject(optr obj, char *app, word id, word chunk)
+{
+    GeodeHandle gh;
+
+    /* Quick test for chunk comes first */
+    if(OptrToChunk(obj)==chunk)
+    {   
+      /* Is geode for special handling loaded? */
+      gh = GeodeFind(app, GEODE_NAME_SIZE, 0, 0);
+
+      /* Construct optr to the object we are looking for */
+      if(gh && OptrToHandle(obj)==GeodeGetGeodeResourceHandle(gh, id))
+        return TRUE;
+    }
+    
+    return FALSE;
+}
+
+Boolean IsInHackClass(optr obj, char *app, word exp)
+{
+    GeodeHandle gh;
+
+    /* Is geode for special handling loaded? */
+    gh = GeodeFind(app, GEODE_NAME_SIZE, 0, 0);
+    /* Is object of the class specified by its export ordinal number? */
+    if(gh && @call obj::MSG_META_IS_OBJECT_IN_CLASS(ProcGetLibraryEntry(gh, exp)))
+      return TRUE;
+
+    return FALSE;
+}
+
+void HackGetInstance(optr obj, word level, word ofs, void *data, word size)
+{
+    byte *base;
+
+    ObjLockObjBlock(OptrToHandle(obj)); // Lock down object's block
+    base = ObjDeref(obj, level);        // Dereference requested variant level
+    memcpy(data, base+ofs, size);       // Get field at specified offset
+    MemUnlock(OptrToHandle(obj));
+}
+
+/* An XPath-inspired way of relative addressing within a Vis object tree... */
+optr VisTreePath(optr obj, char *path)
+{
+    int n;
+    optr obj1;
+
+    while(*path && obj)
+    {
+      obj1 = obj;
+      obj = NullOptr;                   // Not found unless clearly identified
+
+      /* '1'..'9' and 'a'..'z' specify a step to the n-th child (base36) */
+      if((*path>='1' && *path<='9') || (*path>='a' && *path<='z'))
+      {
+        n = (*path - '0') - ((*path>='a')? ('a' - '0' + 10) : 0);
+        if(IsInClass(obj1, VisCompClass))
+          obj = @call obj1::MSG_VIS_FIND_CHILD_AT_POSITION(n-1);
+      }
+      /* '*' specifies a step to the last child */
+      else if(*path=='*')
+      {
+        if(IsInClass(obj1, VisCompClass))
+        {
+          n = @call obj1::MSG_VIS_COUNT_CHILDREN();
+          if(n)
+            obj = @call obj1::MSG_VIS_FIND_CHILD_AT_POSITION(n-1);
+        }
+      }
+      /* '.' specifies a step to the parent */
+      else if(*path=='.')
+      {        
+        if(IsInClass(obj1, VisClass))
+          obj = @call obj1::MSG_VIS_FIND_PARENT();
+      }
+      /* 'C' specifies a step to the content */
+      else if(*path=='C')
+      {
+        if(IsInClass(obj1, GenViewClass))
+          obj = @call obj1::MSG_GEN_VIEW_GET_CONTENT();
+      }
+      path++;
+    }
+
+    return obj;
+}
+
+/*
+ ***************************************************************************
+ *              Code for object identification
+ ***************************************************************************
+ */
+
+#define PSEUDO_OBJ_NONE ConstructOptr(0xFFFF,1)
+#define PSEUDO_OBJ_ON ConstructOptr(0xFFFF,2)
+#define PSEUDO_OBJ_OFF ConstructOptr(0xFFFF,3)
+#define PSEUDO_OBJ_TIME ConstructOptr(0xFFFF,4)
+
+#define IS_PSEUDO_OBJ(_obj) (OptrToHandle(_obj)==0xFFFF)
+
+char *G_textPtr;
+word G_textBufsize;
+optr G_getObject;
+GStateHandle G_gstring;
+
+optr G_actionObject;
+dword G_actionType;
+dword G_actionData;
+
+Boolean _export _pascal FindText(byte *elm,GStateHandle gstate)
+{
+    char *txt = NULL;
+    int len;
+    Boolean newField = FALSE;
+    char gsbuf[2];
+    word size;
+
+    #pragma argsused
+
+    if(*elm==GR_DRAW_TEXT)
+    {
+      txt = (char *)elm+sizeof(byte)+sizeof(word)+sizeof(word);     
+      newField = TRUE;
+    }
+    else if(*elm==GR_DRAW_TEXT_CP)
+      txt = (char *)elm+sizeof(byte);
+    else if(*elm==GR_MOVE_TO)           // Move to seperates fields in tables
+      newField = TRUE;
+    else if(*elm==GR_DRAW_BITMAP || *elm==GR_DRAW_BITMAP_CP ||
+            *elm==GR_FILL_BITMAP || *elm==GR_FILL_BITMAP_CP)
+    {
+      /* Get size of element */
+      GrGetGStringElement(gstate, G_gstring, sizeof(gsbuf), &gsbuf, &size);
+      /* Abort if buffer overflows */
+      len = strlen(G_textPtr);
+      if(len+12 >= G_textBufsize)
+        return TRUE;
+      /* Compute checksum and insert into string */
+      sprintf(G_textPtr+len, PL("%08lx"), calc_crc(elm,size));
+    }
+
+    if(newField && G_textPtr)
+    {
+      if(*G_textPtr && strlen(G_textPtr)+1 < G_textBufsize)
+        strcat(G_textPtr, " ");
+    }
+
+    if(txt)
+    {
+      len = strlen(G_textPtr);
+	  if(len>2 && G_textPtr[len-2]=='-' && G_textPtr[len-1]==' ')
+	    len-=2;							// concatenate hyphenated words
+      if(len+*(word *)txt+1 >= G_textBufsize)
+        return TRUE;                    // abort if buffer overflows
+      strncpy(G_textPtr+len, txt+sizeof(word), *(word *)txt);
+      G_textPtr[len + *(word *)txt] = 0;
+    }
+
+    return FALSE;
+}
+
+void ExtractVisMoniker(optr vismon)
+{
+    char *gs;
+    char *vmbuf,*end;
+    VisMonikerListEntry *vmle;
+    static void *findText = FindText;
+
+    ObjLockObjBlock(OptrToHandle(vismon));
+    vmbuf = LMemDeref(vismon);
+    end = vmbuf + LMemGetChunkSizePtr(vmbuf);
+
+    if( ((VisMoniker *)vmbuf)->VM_type & VMT_MONIKER_LIST )
+    {
+      /* Recursively run through a VisMonikerList to find some useful text */
+
+      /* Look for a Text style moniker */
+      vmle = (VisMonikerListEntry *)vmbuf;
+      while((char *)vmle<end && 
+            ((vmle->VMLE_type & VMLET_STYLE)>>VMLET_STYLE_OFFSET)!=VMS_TEXT)
+        vmle++;
+      
+      /* Check Text moniker with priority if found */
+      if((char *)vmle<end)
+        ExtractVisMoniker(vmle->VMLE_moniker);
+
+      /* Retry all monikers if Text search didn't produce results */
+      vmle = (VisMonikerListEntry *)vmbuf;
+      while((char *)vmle<end && !*G_textPtr)        ExtractVisMoniker((vmle++)->VMLE_moniker);
+    }
+    else
+    {
+      if( ((VisMoniker *)vmbuf)->VM_type & VMT_GSTRING )
+      {
+        gs = vmbuf+VMWGS_gString;
+        G_gstring = GrLoadGString(PtrToSegment(gs), GST_PTR, PtrToOffset(gs));
+        My_GrParseGString((GStateHandle)0, G_gstring, GSC_ONE, findText);
+        GrDestroyGString(G_gstring, NULL, GSKT_LEAVE_DATA);
+      }
+      else
+      {
+		int i,j;
+
+		/* Copy moniker, possibly removing "-\r" sequence (multi-line) */
+		for(i=j=0; vmbuf[VMWT_text+i] && i<G_textBufsize-1; i++)
+		  if(vmbuf[VMWT_text+i]!='-' || vmbuf[VMWT_text+i+1]!='\r')
+		    G_textPtr[j++] = vmbuf[VMWT_text+i];
+		  else
+		    i++;
+		G_textPtr[j] = 0;
+      }
+    }
+    MemUnlock(OptrToHandle(vismon));
+}
+
+/*
+ * Get as much text out of the passed (G_getObject) object's moniker
+ * as possible. This assumes that it already runs on the object's thread.
+ */
+void _export GetVisMoniker(void)
+{
+    ChunkHandle ch;
+    MemHandle block = OptrToHandle(G_getObject);
+
+    *G_textPtr = 0;                     // no text yet
+    
+    ch = @call G_getObject::MSG_GEN_GET_VIS_MONIKER();
+
+    if(ch)
+      ExtractVisMoniker(ConstructOptr(block, ch));
+}
+
+/* 
+ * Handles YearClass, assuming that it already runs on the object's thread.
+ */
+void _export GetYearMoniker(void)
+{
+    byte month;
+    optr monthObj;
+    int d,fd;
+    dword monthMap,reservedMap;
+    char range[32], *p;
+    Boolean first = TRUE;
+    
+    /* Get YI_curMonth and find corresponding month object */
+    HackGetInstance(G_getObject, 8, 0x0002, &month, sizeof(month));
+    monthObj = @call G_getObject::MSG_VIS_FIND_CHILD_AT_POSITION(month-1);
+    if(monthObj && IsInHackClass(monthObj, "geoplann", 1))
+    {
+      /* Get MI_titleString[32] to start month string */
+      HackGetInstance(monthObj, 8, 0x0023, G_textPtr, 32);
+      /* Read MI_monthMap and MI_reservedDayMap */
+      HackGetInstance(monthObj, 8, 0x0018, &monthMap, sizeof(monthMap));
+      HackGetInstance(monthObj, 8, 0x001C, &reservedMap, sizeof(reservedMap));
+      fd = -1;
+      monthMap |= reservedMap;          // Whole days are also reserved
+      for(d=1; d<=32; d++)              // Count 32 days to close all ranges
+      {
+        /* Continue while in continuous sequence of reserved days
+           of the same type (whole/partial day) */
+        if( ((monthMap>>d) & 1) &&
+            (fd==-1 || ((reservedMap>>fd) & 1)==((reservedMap>>d) & 1)) )
+        {
+          if(fd==-1)                    // Start a new range if not in one
+            fd = d;
+        }
+        else
+        {
+          if(fd!=-1)                    // Ending a range?
+          {
+            if(first)                   // Text between month and appointments
+              strcpy(range, PL("Appoint"));
+            else
+              *range = 0;
+            first = FALSE;              // Past the first day with appointments
+
+            p = range + strlen(range);  // Where to point the date range
+            if(fd==d-1)                 // A single isolated date
+              sprintf(p, " %d", d-1);
+            else if(fd==d-2 && !((reservedMap>>fd) & 1))
+              sprintf(p, " %d %d", fd, d-1);
+                                        // Two consecutive dates
+            else                        // More than two consecutive dates
+              sprintf(p, " %d" PL("to") "%d", fd, d-1);
+            if((reservedMap>>fd) & 1)   // Mark ranges of reserved days
+              strcat(range, PL("resday"));
+            if(strlen(G_textPtr) + strlen(range) >= G_textBufsize)
+              break;                    // Abort if buffer overflows
+            strcat(G_textPtr, range);   // Append date range
+            fd = -1;                    // Range has been dealt with
+          }
+          if((monthMap>>d) & 1)         // If range type changed:
+            fd = d;                     // Start new range immediately
+        }
+      }
+    }
+}
+
+/* 
+ * Handles CharsetContentClass, assuming that it already runs on the
+ * object's thread.
+ */
+void _export GetChrTableMoniker(void)
+{
+    word selectionNumber;
+    const byte table[] = {              // order of characters in table
+      0x88, 0x87, 0x8a, 0x89, 0x8b, 0xbe, 0x8c, 0x8d, 0x8f, 0x8e, 
+      0x91, 0x90, 0x93, 0x92, 0x95, 0x94, 0x96, 0x98, 0x97, 0x9a, 
+      0x99, 0x9b, 0xcf, 0xbf, 0xa7, 0x9d, 0x9c, 0x9f, 0x9e, 0xde, 
+      0xd8, 0xcb, 0xe7, 0x80, 0xe5, 0xcc, 0xae, 0x81, 0x82, 0xe9, 
+      0x83, 0xe8, 0xe6, 0xed, 0xea, 0xec, 0xeb, 0x84, 0xf1, 0xee, 
+      0x85, 0xef, 0xcd, 0xce, 0xaf, 0xf4, 0xf2, 0x86, 0xf3, 0xdf, 
+      0xd9, 0x24, 0x26, 0x7e, 0xa1, 0xa2, 0xa3, 0xa4, 0xa8, 0xa9, 
+      0xaa, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb9, 0x60, 0xc2,
+      0xc3, 0xc4, 0xc5, 0xd6, 0xdb, 0xe4, 0xc0, 0xc1, 0xd1, 0xa5, 
+      0x7b, 0x7d, 0x7c, 0x5e, 0xbd, 0xc9};
+
+    /* Get CCI_selectionNumber */
+    HackGetInstance(G_getObject, 4, sizeof(VisContentInstance), 
+      &selectionNumber, sizeof(word));
+
+    /* Return character at position */
+    if(selectionNumber < sizeof(table))
+    {
+      G_textPtr[0] = (char)table[selectionNumber];
+      G_textPtr[1] = 0;
+    }
+    else
+      G_textPtr[1] = 0;
+}
+
+#pragma codeseg OBJID2_TEXT
+
+/*
+ * Special translation for OLButtonClass objects to retrieve the
+ * corresponding Generic object, which is linked in a non-standard way,
+ * to supply state and moniker.
+ */
+optr GenEquiv(optr obj)
+{
+  if(IsInClass(obj, *olbuttonclass))
+  {
+    return @call {OL_BUTTON_GET_GEN_PART_MSG}obj::{OL_BUTTON_GET_GEN_PART_MSG}(0x4803)();
+  }
+  
+  return obj;
+}
+
+void collectChildren(optr root, ObjectRefs *oref, word xOfs, word yOfs)
+{
+    int i,n;
+    optr obj,genObj;
+    GenInteractionVisibility giv;
+    word id;
+    Rectangle rect;
+
+    /* abort if object run by different thread (typically a VisContent),
+       to avoid deadlocking on @call */
+    if(!ObjTestIfObjBlockRunByCurThread(OptrToHandle(root))) return;
+    
+    genObj = GenEquiv(root);
+
+    /* If we have seen the old pseudo cursor objects in the tree, keep them.
+       This ensures that the references get purged if the objects go out of
+       view. */
+    if(root==G_lastObj.pseudoCursor)
+      oref->pseudoCursor = root;
+    if(root==G_lastObj.pseudoCursorRoot)
+      oref->pseudoCursorRoot = root;
+
+    if(IsInClass(genObj, GenClass))
+    {
+      @call root::MSG_VIS_GET_BOUNDS(&rect);
+
+      rect.R_left += xOfs;
+      rect.R_top += yOfs;
+
+      /* 
+       * Identify elements that map to the softkeys 
+       */
+      if(HasVardata(genObj, HINT_SEEK_REPLY_BAR) ||
+         HasVardata(genObj, HINT_SEEK_MENU_BAR)) 
+      {
+        if(@call genObj::MSG_GEN_GET_USABLE() &&
+           @call genObj::MSG_GEN_GET_ENABLED())
+        {
+          if(rect.R_top<48) oref->buttonLabels[0] = genObj;
+          else if(rect.R_top<96) oref->buttonLabels[1] = genObj;
+          else if(rect.R_top<144) oref->buttonLabels[2] = genObj;
+          else if(rect.R_top<192) oref->buttonLabels[3] = genObj;
+          else if(IsInClass(genObj, ComplexMonikerClass))
+          {
+            GetComplexMoniker gcm;
+
+            /* Recognize menu trigger by its name, just like the system */
+            @call genObj::MSG_COMPLEX_MONIKER_GET_MONIKER(&gcm);
+            if(gcm.GCM_topText==CMT_MENU)
+              oref->flags |= ORF_HAS_MENU;
+          }
+        }
+      }
+      
+      /* 
+       * Identify dialog label
+       *
+       * Rule:
+       * It must be the top-leftmost object meeting the following criteria:
+       *   - It is wider than 7 pixels (to avoid confusion with vertical dividers)
+       *   - It is in the upper half of the screen (e.g. Contacts window)
+       *   - It is either a text object, or
+       *   - It has a VisMoniker and is neither the GenPrimary nor a
+       *     dialog-type GenInteraction nor a GenItem
+       */
+      else if((!oref->dialogLabel ||
+               rect.R_top < oref->dialogLabelPos.P_y ||
+               (rect.R_top == oref->dialogLabelPos.P_y && 
+                rect.R_left < oref->dialogLabelPos.P_x)) &&
+               (rect.R_right-rect.R_left > 7) &&
+               (rect.R_top < 100))
+      {
+        if(IsInClass(genObj, GenTextClass) ||
+           (@call genObj::MSG_GEN_GET_VIS_MONIKER() && 
+            !IsInClass(genObj, GenPrimaryClass) &&
+            !IsInClass(genObj, GenItemClass) &&
+            (!IsInClass(genObj, GenInteractionClass) ||
+             @call genObj::MSG_GEN_INTERACTION_GET_VISIBILITY()==GIV_SUB_GROUP) &&
+            !HasVardata(genObj, HINT_DO_NOT_USE_MONIKER)))
+        {
+          oref->dialogLabel = genObj;
+          oref->dialogLabelPos.P_x = rect.R_left;
+          oref->dialogLabelPos.P_y = rect.R_top;
+        }
+      }
+    }
+
+    /* 
+     * Try to refine an as-of-yet unidentified focus item 
+     */
+    if(!oref->focusLabel)
+    {
+      if(oref->textObj)
+      {
+        if(IsInClass(root, GenItemGroupClass) &&
+           (HasVardata(root, HINT_ITEM_GROUP_SCROLLABLE) ||
+            HasVardata(root, HINT_ITEM_GROUP_SHOW_SELECTION_EVEN_WHEN_NOT_FOCUS)))
+        {
+          id = @call root::MSG_GEN_ITEM_GROUP_GET_FOCUS_ITEM();
+          if(id != GIGS_NONE)
+          {
+            obj = @call root::MSG_GEN_ITEM_GROUP_GET_ITEM_OPTR(id);
+
+            if(obj)
+              oref->focusLabel = @call root::MSG_GEN_ITEM_GROUP_GET_ITEM_OPTR(id);
+          }
+          else
+          {
+            /*
+             * HACK:
+             * 
+             * For calculator result list, focus the last entry which
+             * contains the most recent result.
+             */
+            if(IsHackObject(oref->textObj, "calc    ", 11, 0x40))
+            {
+              n = @call root::MSG_VIS_COUNT_CHILDREN();
+              if(n)
+                oref->focusLabel = @call root::MSG_VIS_FIND_CHILD_AT_POSITION(n-1);
+            }
+          }
+        }
+      }
+      else
+      {
+        if(IsInClass(root, VisTextClass))
+        {
+          if(@call root::MSG_VIS_TEXT_GET_STATE() & VTS_EDITABLE)
+            oref->textObj = root;
+          else
+            oref->focusLabel = root;
+        }
+      }
+    }
+
+    /*
+     * Ignore non-selected call headers in phone application
+     */
+    if(IsInHackClass(root, "phone   ", 7))
+    {
+      Boolean selected = FALSE;
+
+      /* Get CHI_selected instance of CallHeaderClass */
+      HackGetInstance(root, 6, 0x45, &selected, sizeof(selected));
+      if(!selected)
+        return;
+    }
+
+    /* 
+     * Process children of composite objects 
+     */
+    if(IsInClass(genObj, GenViewClass))
+    {
+      obj = @call root::MSG_GEN_VIEW_GET_CONTENT();
+      /* Devlivery Reports screen contains a view with itself as content! */
+      if(obj != root)
+        collectChildren(obj, oref, rect.R_left, rect.R_top);
+    }
+    else if(IsInClass(root, VisCompClass))
+    {
+      n = @call root::MSG_VIS_COUNT_CHILDREN();
+      for(i=0; i<n; i++)
+      {
+        obj = @call root::MSG_VIS_FIND_CHILD_AT_POSITION(i);
+
+        /* Skip unopened sub-dialogs */
+        if(IsInClass(obj, GenInteractionClass))
+        {
+          giv = @call obj::MSG_GEN_INTERACTION_GET_VISIBILITY();
+          if(giv==GIV_POPUP || giv==GIV_DIALOG)
+            continue;
+        }
+        
+        collectChildren(obj, oref, xOfs, yOfs);
+      }
+    }
+}
+
+Boolean getObjectsInContent(optr obj, ObjectRefs *oref)
+{
+    Boolean ret = FALSE;
+    optr first,parent;
+
+    if(IsInClass(obj, VisTextClass))
+    {
+      if(@call obj::MSG_VIS_TEXT_GET_STATE() & VTS_EDITABLE)
+        oref->textObj = obj;
+      else
+        oref->focusLabel = obj;
+
+      parent = @call obj::MSG_VIS_FIND_PARENT();
+      if(IsInClass(parent, VisCompClass) &&
+         !(GEO_ATTRS(@call parent::MSG_VIS_COMP_GET_GEO_ATTRS()) & 
+           VCGA_ORIENT_CHILDREN_VERTICALLY))
+      {
+        first = @call parent::MSG_VIS_FIND_CHILD_AT_POSITION(0);
+        if(first!=obj && IsInClass(first, VisTextClass))
+        {
+          if(oref->textObj)
+            oref->focusLabel = first;
+          else
+            oref->focusParent = first;
+        }
+      }
+
+      ret = TRUE;
+    }
+    
+    return ret;
+}
+
+void getObjects(optr obj, optr *focusTree, optr nFocus, ObjectRefs *oref)
+{
+    optr genObj,genInt;
+    int level, focuslevel;
+    GenInteractionVisibility giv;
+
+    /* See if we can identify the focus by some special shortcuts for
+       VisContent structures like the Calendar application. */
+    getObjectsInContent(obj, oref);
+
+    if(oref->focusLabel)
+      focuslevel = 0;
+    else
+      focuslevel = -1;
+
+    level = 0;
+    genInt = 0;
+    do {      
+      if(focuslevel==-1 && IsInClass(obj, GenBooleanClass))
+      {
+        optr parent = @call obj::MSG_GEN_FIND_PARENT();
+        if(IsInClass(parent, GenBooleanGroupClass))
+        {
+          word id = @call obj::MSG_GEN_BOOLEAN_GET_IDENTIFIER();
+          if(@call parent::MSG_GEN_BOOLEAN_GROUP_GET_SELECTED_BOOLEANS() & id)
+            oref->focusLabel = PSEUDO_OBJ_ON;
+          else
+            oref->focusLabel = PSEUDO_OBJ_OFF;
+          oref->focusParent = obj;
+          focuslevel = level;
+          oref->flags |= ORF_CHOICE_FOCUS;
+        }
+      }
+
+      genObj = GenEquiv(obj);
+      if(IsInClass(genObj, GenClass))
+      {
+        if(!genInt && genObj==obj)
+        {
+          if(IsInClass(genObj, GenInteractionClass))
+          {
+            giv = @call genObj::MSG_GEN_INTERACTION_GET_VISIBILITY();
+            if(giv==GIV_POPUP || giv==GIV_DIALOG)
+            {
+              genInt = genObj;
+              break;
+            }
+          }
+          else if(IsInClass(genObj, GenDisplayClass))
+          {
+            genInt = genObj;
+            break;
+          }
+        }
+
+        /* Vardata check guards against rare cases where a dialog box title
+           is mistaken for the label of the focussed field. */
+        if(@call genObj::MSG_GEN_GET_VIS_MONIKER() 
+           && oref->textObj != genObj
+           && !(IsInClass(genObj, ComplexMonikerClass) 
+                && (HasVardata(genObj, HINT_COMPLEX_MONIKER_DRAW_SEPARATOR)
+                    || HasVardata(genObj, ATTR_COMPLEX_MONIKER_SEPARATOR_START_POINT))))
+        {
+          if(focuslevel==-1)
+          {
+            oref->focusLabel = genObj;
+            focuslevel = level;
+          }
+          else if(!oref->focusParent && (level==focuslevel+1 || level==focuslevel+2))
+            oref->focusParent = genObj;
+        }
+      }
+
+      if(IsInClass(obj, VisClass))
+      {
+        obj = @call obj::MSG_VIS_FIND_PARENT();
+      }
+      else if(nFocus)
+      {
+        obj = focusTree[--nFocus];
+      }
+      else
+      {
+        obj = NullOptr;
+      }
+
+      level++;
+    } while(obj);
+
+    /* If we have a text object and a label, make room for focus
+       in a selection list, if any */
+    if(oref->textObj && !oref->focusParent)
+    {
+      oref->focusParent = oref->focusLabel;
+      oref->focusLabel = NullOptr;     
+    }
+
+    if(genInt)
+    {
+      collectChildren(genInt, oref, 0, 0);
+
+      /*
+       * HACK:
+       *
+       * Special focus redirections for certain dialogs
+       */
+      if(IsHackObject(genInt, "fclock  ", 16, 0x1e))
+      {
+        // Read alarm time in clock
+        oref->focusLabel =  VisTreePath(genInt, "11121221");
+        oref->focusParent = VisTreePath(genInt, "1112121");
+      }
+      else if(IsHackObject(genInt, "fclock  ", 11, 0x1e))
+      {
+        // Speek time of day in Clock's main view
+        oref->treeObj = VisTreePath(genInt, "111222");
+        oref->focusLabel = PSEUDO_OBJ_TIME;
+      }
+      else if(IsHackObject(genInt, "fclock  ", 13, 0x1e))
+      {
+        // Speek info in World Time window
+        oref->treeObj = VisTreePath(genInt, "111");
+        oref->focusLabel = oref->dialogLabel = NullOptr;
+      }
+      else if(IsHackObject(oref->buttonLabels[0], "geoplann", 30, 0x2e))
+      {
+        /* We have to detect this state through the button label because
+           the genInt and dialogLabel is always the same in the planner */
+
+        // Find objects in month view of calendar
+        oref->dialogLabel = VisTreePath(genInt, "1211C1");  /* YearClass */
+        oref->focusLabel = VisTreePath(genInt, "12211");    /* Current day */
+        oref->treeObj = VisTreePath(oref->focusLabel, "C"); /* Day's appointments */
+        
+        /* Make sure appointments are re-read when day changes */
+        oref->flags |= ORF_TREE_TO_FOCUS;
+      }      
+      else if(IsHackObject(oref->focusParent, "geoplann", 36, 0x3e) || 
+              IsHackObject(oref->focusParent, "geoplann", 36, 0x72))
+      {
+        // Insert "whole days" or "(date)" in Details view of Calendar
+        oref->focusLabel = VisTreePath(oref->focusParent, "2"); 
+      }
+	  else if(IsHackObject(oref->textObj, "geoplann", 36, 0x9e))
+	  {
+	    // Insert "minutes before event" in "Alarm" submenu of event details
+ 	    oref->focusLabel = VisTreePath(oref->textObj, ".2");
+	  }
+      else if(IsHackObject(genInt, "about   ", 5, 0x1e))
+      {
+        // Read version/build number in "About" screen
+        oref->focusLabel = VisTreePath(genInt, "1122C18");
+      }
+      else if(IsInHackClass(genInt, "text    ", 53))
+      {
+        // Read character in Chr dialog
+        oref->focusLabel = VisTreePath(genInt, "12C");
+      }
+      else if(IsHackObject(genInt, "phone   ", 21, 0x0040))
+      {
+        // Do not mistake one of the call glyphs for a dialog label
+        oref->dialogLabel = NullOptr;
+      }
+      else if(IsInHackClass(oref->focusParent, "contlog ", 1))
+      {
+        // Do not speak heading of contact log table (LogGenDynamicListClass)
+        oref->focusParent = NullOptr;
+      }
+      else if(IsHackObject(genInt, "sys     ", 8, 0x3a))
+      {
+        // Screen blanker period (numeric display)
+        oref->focusLabel = VisTreePath(genInt, "11*11");
+      }
+      else if(IsHackObject(genInt, "sys     ", 8, 0x78))
+      {
+        // Backlight period (numeric display)
+        oref->focusLabel = VisTreePath(genInt, "11*1");
+      }
+      else if(IsHackObject(genInt, "notebk  ", 5, 0x70))
+      {
+        // File info in Notes
+        oref->focusLabel = NullOptr;
+        oref->treeObj = VisTreePath(genInt, "11");
+      }
+      else if(IsInHackClass(genInt, "foam    ", 0x7b))
+      {
+        // Second line in progress dialog
+        oref->focusLabel = VisTreePath(genInt, "13");
+      }
+      else if(IsInHackClass(genInt, "nwapb   ", 26))
+      {
+        // Entire page in WAP browser as tree root
+        oref->treeObj = VisTreePath(genInt, "113C");
+      }
+      else if(IsInHackClass(oref->textObj, "convrt  ", 4))
+      {
+        // Focus is on ConverterFieldTextClass in Converter?
+        // Find left border object and test if it is the right class,
+        // i.e. ConverterFormListBorderClass.
+        obj = VisTreePath(genInt, "1111");
+        if(obj && IsInHackClass(obj, "convrt  ", 1))
+        {
+          Boolean thickBoxFlag;
+          
+          // Get CFLBI_thickBoxFlag
+          HackGetInstance(obj, 6, 0x0015, &thickBoxFlag, sizeof(Boolean));
+
+          // If left box is not focused, select right list and text object
+          if(!thickBoxFlag)
+          {
+            word id;
+            oref->focusLabel = VisTreePath(genInt, "11221");
+            obj = VisTreePath(genInt, "11121C1");
+            oref->textObj = NullOptr;
+            oref->focusParent = NullOptr;
+            if(obj)
+            {
+              // Get selected list item
+              id = @call obj::MSG_GEN_ITEM_GROUP_GET_FOCUS_ITEM();
+              if(id != GIGS_NONE)
+                oref->focusParent = @call obj::MSG_GEN_ITEM_GROUP_GET_ITEM_OPTR(id);
+            }
+          }
+        }
+      }
+    }
+
+    if(oref->dialogLabel==oref->focusLabel)
+      oref->focusLabel = NullOptr;
+    if(oref->dialogLabel==oref->focusParent)
+      oref->focusParent = NullOptr;
+    if(oref->dialogLabel==oref->textObj)
+      oref->dialogLabel = NullOptr;
+
+    /*
+     * Identify focus type
+     */
+    if(oref->focusLabel && !IS_PSEUDO_OBJ(oref->focusLabel))
+    {
+      if(HasVardata(oref->focusLabel, HINT_IS_POPUP_LIST))
+        oref->flags |= ORF_CHOICE_FOCUS;
+      else if(IsInClass(oref->focusLabel, GenItemClass))
+      {
+        optr parent = @call oref->focusLabel::MSG_VIS_FIND_PARENT();
+        if(IsInClass(parent, GenItemGroupClass))
+        {
+          Boolean exclusive;
+
+          /* Get OLIGI_exclusiveBehavior of OLItemGroupInstance */
+          HackGetInstance(parent, 4, 0x41, &exclusive, sizeof(Boolean));
+
+          if(exclusive)
+          {
+            oref->flags |= ORF_MENU_EXCL;
+          }
+          else
+          {
+            /* Listbox is in multiselection mode - find out state of item */
+            word id = @call oref->focusLabel::MSG_GEN_ITEM_GET_IDENTIFIER();
+            if(@call parent::MSG_GEN_ITEM_GROUP_IS_ITEM_SELECTED(id))
+              oref->flags |= ORF_MENU_SELECTED;
+          }
+        }
+
+        oref->flags |= ORF_MENU_FOCUS;
+      }
+    }
+
+    /*
+     * Identify single- vs. multiple line text fields
+     */
+    if(oref->textObj && IsInClass(oref->textObj, VisTextClass) &&
+       (@call oref->textObj::MSG_VIS_TEXT_GET_STATE() & VTS_ONE_LINE))
+    {
+      oref->flags |= ORF_TEXT_IS_ONE_LINE;
+    }
+
+    /*
+     * HACK
+     *
+     * Voice recorder: do not speak key changes, to avoid
+     * disrupting recording and playback.
+     */
+    if(IsHackObject(genInt, "vrecd   ", 5, 0x46))
+      oref->flags |= ORF_DONT_SPEAK_KEYS;
+}
+
+#pragma codeseg OBJID3_TEXT
+
+void rtrim(char *buf)
+{
+    word len;
+
+    /* Truncate trailing control characters (typically CRs) */
+    len = strlen(buf);
+    while(len && ((byte)buf[len-1])<=' ' && buf[len-1]!='\x01')
+      len--;
+    buf[len] = 0;
+}
+
+void cleanup(char *buf, int bufsize)
+{
+    int i,j;
+
+    /* Remove control characters. Replace all except for soft hyphens
+       by spaces, since it doesn't matter for speaking anyway. */
+    for(i=j=0; buf[i] && i<bufsize-1; i++)
+    {
+      if((byte)buf[i] >= ' ' || buf[i]=='\x01')
+        buf[j++] = buf[i];
+      else if(buf[i]==C_GRAPHIC)
+      {
+        /* Replace graphic by placeholder - we have to do this without
+           overflowing or overwriting the buffer that we are working in. */
+        const char ins[] = PL("Image");
+        const int inslen = sizeof(ins)-1;
+        int d = inslen - (i-j) - 1;
+
+        if(d>0)
+        {
+          memmove(buf+i+d, buf+i, bufsize-i-d);
+          i += d;
+        }
+        memcpy(buf+j, ins, inslen);
+        j += inslen;
+      }
+      else if(buf[i]!=C_OPTHYPHEN)
+        buf[j++] = ' ';
+    }
+    buf[j] = 0;
+}
+
+char getBackspChar(optr obj)
+{
+    Boolean editable;
+    VisTextRange cpos;
+    TextReference tr;
+    char backspChar[2] = {0,0};
+
+    editable = @call obj::MSG_VIS_TEXT_GET_STATE() & VTS_EDITABLE;
+    @call obj::MSG_VIS_TEXT_GET_SELECTION_RANGE(&cpos);
+
+    /* Get character affected by Backspace */
+    if(editable && cpos.VTR_start>0)
+    {
+      /* Get character into the passed buffer */
+      tr.TR_type = TRT_POINTER;
+      tr.TR_ref.TRU_pointer.TRP_pointer = backspChar;
+      @call obj::MSG_VIS_TEXT_GET_TEXT_RANGE(0, tr,
+        cpos.VTR_start, cpos.VTR_start-1);
+    }
+
+    return backspChar[0];
+}
+
+dword getTextPart(optr obj, dword pos, word getWhat, char *labelText,
+                  word bufsize, word *cursorPos, word *cursorPos2)
+  #define GET_WHAT_LETTER           0
+  #define GET_WHAT_WORD             1
+  #define GET_WHAT_LINE             2
+  #define GET_WHAT_ALL              3
+  #define GET_WHAT_SELECTION        4
+  #define GET_WHAT_SELECTION_OR_ALL 5
+  #define GET_WHAT_NEXT_LINE        6
+  #define GET_WHAT_PREV_LINE        7
+{
+    VisTextGetLineInfoReturnValues retValue;
+	VisTextGetLineInfoParameters vtglip;
+    VisTextGetLineOffsetAndFlagsParameters vtgloafp;
+    LineInfo li;
+    TextReference tr;
+    dword size;
+    dword start,end;
+    VisTextRange cpos;
+    int i,j;
+    byte c;
+    Boolean clipped = FALSE;
+    Boolean acquired = FALSE;
+    Boolean editable;
+
+    editable = @call obj::MSG_VIS_TEXT_GET_STATE() & VTS_EDITABLE;
+    @call obj::MSG_VIS_TEXT_GET_SELECTION_RANGE(&cpos);
+    size = @call obj::MSG_VIS_TEXT_GET_TEXT_SIZE();
+
+    *labelText = 0;
+    if(cursorPos)                       // default: no cursor position
+    {
+      *cursorPos = *cursorPos2 = CURSOR_POS_NONE;
+      if(!editable)
+        cursorPos = NULL;               // do not return cursor if non-editable
+    }
+    
+    if(pos==(dword)-1 || pos==TEXT_ADDRESS_PAST_END)
+    {
+      pos = editable? cpos.VTR_start : 0;
+      acquired = TRUE;
+    }
+
+    /* Get start of cursor line */
+    switch(getWhat)      
+    {
+      case GET_WHAT_LETTER:
+        start = pos;
+        end = start+1;
+        break;
+
+      case GET_WHAT_WORD:
+      case GET_WHAT_LINE:
+      case GET_WHAT_PREV_LINE:
+      case GET_WHAT_NEXT_LINE:
+        vtgloafp.VTGLOAFP_line = @call obj::MSG_VIS_TEXT_GET_LINE_FROM_OFFSET(pos);
+
+        /* Go to next/previous line (if exists) from current one */
+        if(!acquired)
+        {
+          if(getWhat==GET_WHAT_PREV_LINE && vtgloafp.VTGLOAFP_line>0)
+            vtgloafp.VTGLOAFP_line--;
+          else if(getWhat==GET_WHAT_NEXT_LINE)
+          {
+            @call obj::MSG_VIS_TEXT_GET_LINE_OFFSET_AND_FLAGS(&vtgloafp);
+            if(!(vtgloafp.VTGLOAFP_flags & LF_ENDS_IN_NULL))
+              vtgloafp.VTGLOAFP_line++;
+          }
+        }
+
+        @call obj::MSG_VIS_TEXT_GET_LINE_OFFSET_AND_FLAGS(&vtgloafp);
+        start = vtgloafp.VTGLOAFP_offset;
+
+        /* Get end of cursor line */
+        vtglip.VTGLIP_buffer = &li;
+        vtglip.VTGLIP_bsize = sizeof(li);
+        vtglip.VTGLIP_line = vtgloafp.VTGLOAFP_line;
+        @call obj::MSG_VIS_TEXT_GET_LINE_INFO(&retValue, &vtglip);
+        end = start + li.LI_count.WAAH_low;
+        break;
+
+      case GET_WHAT_SELECTION:
+        start = cpos.VTR_start;
+        end = cpos.VTR_end;
+        break;
+
+      case GET_WHAT_SELECTION_OR_ALL:
+        /* Speak selection range, if any */
+        if(cpos.VTR_start!=cpos.VTR_end)
+        {
+          start = cpos.VTR_start;
+          end = cpos.VTR_end;
+          break;
+        }
+        /* fall through */
+      case GET_WHAT_ALL:
+        start = pos;
+        end = size;
+        break;
+    }
+
+    if(end>size) end = size;            // Limit to actual text size
+
+    if(start!=end)                      // Any characters at all
+    {
+      VisTextCharAttr vtca;
+      VisTextCharAttrDiffs diffs;
+      
+      @call obj::MSG_VIS_TEXT_GET_CHAR_ATTR(0, &diffs, &vtca, end, start);
+      
+      if(end>start+bufsize-1)
+      {
+        end = start+bufsize-1;
+        clipped = TRUE;
+      }
+
+      /* Get text into the passed buffer */
+      tr.TR_type = TRT_POINTER;
+      tr.TR_ref.TRU_pointer.TRP_pointer = labelText;
+      @call obj::MSG_VIS_TEXT_GET_TEXT_RANGE(0, tr, end, start);   
+
+      /* Don't speak "secret" text obscured by asterisks */
+      if(!(diffs.VTCAD_diffs & VTCAF_MULTIPLE_FONT_IDS) && 
+        vtca.VTCA_fontID==FID_BISON)
+      {
+        for(i=0; labelText[i]; i++)
+          labelText[i] = '*';
+      }
+      
+      if(getWhat==GET_WHAT_WORD)      // Extract word from line
+      {
+        i = (int)(pos-start);         // Go to character at cursor position
+        
+        /* First scan left for start of word, then copy entire word */
+        while(i>0 && (isword(labelText[i-1]) || labelText[i-1]=='-'))
+          i--;
+        for(j=0; isword(labelText[i]) || labelText[i]=='-'; j++,i++)
+          labelText[j] = labelText[i];
+        labelText[j] = 0;             // Truncate after word
+        end = start+i;                // Point after word
+      }
+      /* If we know we have lost some characters, remove potentially
+         incomplete sentence from the end to improve prosody for
+         external speech. */
+      else if((getWhat==GET_WHAT_ALL || getWhat==GET_WHAT_SELECTION_OR_ALL) 
+        && clipped)
+      {
+        /* Remove trailing characters until we come to something resembling
+           a sentence break... */
+        i = j = strlen(labelText);
+        while(i>0 && 
+              (c=labelText[i-1], isword(c) || c<=' ' || c=='-' || c==','))
+          i--;
+        
+        if(i==0) {                    // Only incomplete sentence: 
+          i = j;                      // Use all except for last word
+          while(i>0 && isword(labelText[i-1]))
+            i--;
+          if(i==0) i = j;             // Very unlikely: one huge word...
+        }
+        labelText[i] = 0;             // Truncate after sentence
+        end = start+i;                // Point after last sentence
+      }
+    }
+
+    cleanup(labelText, bufsize);
+
+    /* Use TEXT_ADDRESS_PAST_END return to indiciate that no more text has
+       to be read because the buffer was large enough. */
+    if(end>=size || (getWhat==GET_WHAT_SELECTION_OR_ALL && !clipped))
+      end = TEXT_ADDRESS_PAST_END;
+
+    /* Cursor position in fragment */
+    if(cursorPos && getWhat!=GET_WHAT_WORD)
+    {
+      /* Selection range overlaps, at least partly, with fragment */
+      if(cpos.VTR_end>=start && (cpos.VTR_start<end || end==size))
+      {
+        *cursorPos = (cpos.VTR_start>start)? (word)(cpos.VTR_start-start) : 0;       
+        *cursorPos2 = (word)(((cpos.VTR_end<end)? cpos.VTR_end : end) - start);
+
+        if(*cursorPos==*cursorPos2 && cpos.VTR_start!=cpos.VTR_end)
+          *cursorPos = *cursorPos2 = CURSOR_POS_NONE;
+      }
+    }
+
+    return 
+      (getWhat==GET_WHAT_PREV_LINE || getWhat==GET_WHAT_NEXT_LINE)? start : end;
+                                        // Return position past end
+}
+
+dword getObjectName(optr obj, char *labelText, word bufsize)
+{
+    dword pos = (dword)-1;
+  
+    *labelText = 0;
+    
+    if(bufsize<BUFSIZE_GUARD)           // buffer too small for safety...
+      return pos;
+
+    if(obj && obj!=PSEUDO_OBJ_NONE)
+    {
+      G_getObject = obj;                // Set up params for inter-thread calls
+      G_textPtr = labelText;
+      G_textBufsize = bufsize;
+
+      if(obj==PSEUDO_OBJ_ON)
+        strcpy(labelText, PL("On"));
+      else if(obj==PSEUDO_OBJ_OFF)
+        strcpy(labelText, PL("Off"));
+      else if(obj==PSEUDO_OBJ_TIME)
+      {
+        TimerDateAndTime time;
+
+        /* Assemble time/date string */
+        TimerGetDateAndTime(&time);     // Get current time/date
+        LocalFormatDateTime(labelText, DTF_HM_24HOUR, &time);
+      }
+      else if(IsInClass(obj, VisTextClass))
+      {
+        pos = getTextPart(obj, 0, GET_WHAT_SELECTION_OR_ALL, labelText, bufsize,
+          NULL, NULL);
+        if(pos==TEXT_ADDRESS_PAST_END)
+          pos = (dword)-1;
+      }      
+      else if(IsInHackClass(obj, "geoplann", 0))
+        @CALL_ROUTINE(obj, GetYearMoniker)
+      else if(IsInHackClass(obj, "text    ", 54))
+        @CALL_ROUTINE(obj, GetChrTableMoniker)
+      else 
+        @CALL_ROUTINE(obj, GetVisMoniker)
+    }
+
+    rtrim(labelText);                   // Truncate trailing ctrl characters
+
+    return pos;
+}
+
+void recurseObjectTree(optr root, char *buf, word bufsize)
+{
+    word i,n;
+    optr obj;
+    GenInteractionVisibility giv;
+
+    /* abort if object run by different thread (typically a VisContent),
+       to avoid deadlocking on @call */
+    if(!ObjTestIfObjBlockRunByCurThread(OptrToHandle(root))) return;
+
+    if(bufsize<BUFSIZE_GUARD) return;   // buffer too small for safety...
+    
+    if(IsInClass(root, LevelIndicatorClass))
+    {
+      LevelIndicatorInstance *lii;
+      byte *bitmap;
+
+      /* We can only do this because we know the object is on our thread */
+      ObjLockObjBlock(OptrToHandle(root));
+      lii = ObjDerefGen(root);
+      bitmap = LMemDerefHandles(OptrToHandle(root), lii->LII_typeBitmap);
+      sprintf(buf+strlen(buf), " " PL("%08lx") PL("L%d"),
+        calc_crc(bitmap, LMemGetChunkSizePtr(bitmap)),
+        lii->LII_currLevel);
+      MemUnlock(OptrToHandle(root));
+    }
+    else if(IsInClass(root, VisClass) &&
+            !IsInClass(root, GenPrimaryClass) &&
+            !HasVardata(root, HINT_DO_NOT_USE_MONIKER))
+    {
+      int len = strlen(buf);
+
+      if(len && buf[len-1]!=' ' && bufsize-len-1>=BUFSIZE_GUARD)
+      {
+        strcat(buf, " ");
+        len++;
+      }
+      if(bufsize-len>=BUFSIZE_GUARD)
+      {
+        if(IsInClass(root, VisTextClass))
+          getTextPart(root, 0, GET_WHAT_ALL, buf+len, bufsize-len, NULL, NULL);
+        else 
+        {
+          G_getObject = root;           // Set up params for inter-thread call
+          G_textPtr = buf+len;
+          G_textBufsize = bufsize-len;
+          @CALL_ROUTINE(root, GetVisMoniker)
+        }
+      }
+    }
+
+    if(IsInClass(root, VisCompClass))
+    {
+      n = @call root::MSG_VIS_COUNT_CHILDREN();
+      for(i=0; i<n; i++)
+      {
+        obj = @call root::MSG_VIS_FIND_CHILD_AT_POSITION(i);
+
+        /* Skip sub-dialogs */
+        if(IsInClass(obj, GenInteractionClass))
+        {
+          giv = @call obj::MSG_GEN_INTERACTION_GET_VISIBILITY();
+          if(giv==GIV_POPUP || giv==GIV_DIALOG)
+            continue;
+        }
+        
+        recurseObjectTree(obj, buf, bufsize);
+      }
+    }
+}
+
+void _export GetObjectTree(void)
+{
+    recurseObjectTree(G_getObject, G_textPtr, G_textBufsize);
+}
+
+void getObjectTree(optr root, char *buf, word bufsize)
+{
+    *buf = 0;
+
+    if(root)
+    {
+      G_getObject = root;
+      G_textPtr = buf;
+      G_textBufsize = bufsize;
+
+      @CALL_ROUTINE(root, GetObjectTree)
+    }
+}
+
+/*
+ ***************************************************************************
+ *              Code for actions on text objects
+ ***************************************************************************
+ */
+
+void _export DoAction(void)
+{
+    optr obj = G_actionObject;
+    dword cpos, pos, click, endline;
+	VisTextGetLineInfoParameters vtglip;
+    VisTextGetLineOffsetAndFlagsParameters vtgloafp;
+    VisTextGetLineInfoReturnValues retValue;
+    LineInfo li;
+
+    switch(G_actionType)
+    {
+      case TET_ACTION_ROUTING_CURSOR:
+      case TET_ACTION_ROUTING_PSEUDO:        
+      case TET_ACTION_MARK_CURSOR:
+      case TET_ACTION_MARK_PSEUDO:        
+        cpos = @call obj::MSG_VIS_TEXT_GET_SELECTION_START();
+        
+        /* Reference position: line with cursor or pseudo cursor */
+        if(G_actionType==TET_ACTION_ROUTING_PSEUDO ||
+           G_actionType==TET_ACTION_MARK_PSEUDO)
+        {
+          pos = G_pseudoCursorPos;
+        }
+        else
+        {
+          pos = cpos;
+        }
+
+        /* Get start of cursor line */
+        vtgloafp.VTGLOAFP_line = 
+          @call obj::MSG_VIS_TEXT_GET_LINE_FROM_OFFSET(pos);
+        @call obj::MSG_VIS_TEXT_GET_LINE_OFFSET_AND_FLAGS(&vtgloafp);
+
+        /* Get end of cursor line */
+        vtglip.VTGLIP_buffer = &li;
+        vtglip.VTGLIP_bsize = sizeof(li);
+        vtglip.VTGLIP_line = vtgloafp.VTGLOAFP_line;
+        @call obj::MSG_VIS_TEXT_GET_LINE_INFO(&retValue, &vtglip);
+
+        click = vtgloafp.VTGLOAFP_offset + G_actionData;
+        endline = vtgloafp.VTGLOAFP_offset + li.LI_count.WAAH_low;
+
+        /* Allow positioning the cursor onto the NUL character */
+        if(vtgloafp.VTGLOAFP_flags & LF_ENDS_IN_NULL)
+          endline++;
+
+        /* Limit click position to positions before line end */
+        if(click>=endline)
+          click = endline-1;
+
+        /* Mark selection or position cursor */
+        if(G_actionType==TET_ACTION_MARK_CURSOR ||
+           G_actionType==TET_ACTION_MARK_PSEUDO)
+        {
+          /* Click can be before or after cursor position */
+          if(click>cpos)
+            @call obj::MSG_VIS_TEXT_SELECT_RANGE(click+1, cpos);
+          else
+            @call obj::MSG_VIS_TEXT_SELECT_RANGE(cpos+1, click);
+        }
+        else
+        {
+          @call obj::MSG_VIS_TEXT_SELECT_RANGE(click, click);
+        }
+        break;
+    }
+}
+
+void doAction(optr obj, TalkEventType tet, dword data)
+{
+    G_actionObject = obj;
+    G_actionType = tet;
+    G_actionData = data;
+    @CALL_ROUTINE(obj, DoAction);
+}
+
+/*
+ ***************************************************************************
+ *              Code running on UI thread
+ ***************************************************************************
+ */
+
+#pragma codeseg MAIN_OBJID_TEXT
+
+/* pass to CompileOutput */
+optr G_app;
+TalkEventType G_eventType;
+dword G_eventData;
+
+/* return from CompileOutput */
+WordFlags G_sayWhat;
+
+/* return from UserInterfaceThread */
+ObjectRefs G_oref;
+optr G_content;
+Boolean G_UserInterfaceThreadRet;
+
+optr getFocus(optr app, optr *focusTree, word *nFocus, optr *content)
+{
+    optr obj, focus2;
+
+    /* Find leaf of current focus hierarchy and collect focus levels */
+    if(nFocus) *nFocus = 0;
+    *content = NullOptr;
+
+    obj = app; 
+    while(@call obj::MSG_META_GET_FOCUS_EXCL(&focus2) && focus2)
+    {
+      if(!ObjTestIfObjBlockRunByCurThread(OptrToHandle(focus2)))
+      { 
+        *content = focus2;              // Abort if crossing into other thread
+        break;
+      }
+      if(focusTree) focusTree[(*nFocus)++] = obj;
+      obj = focus2;
+    }
+
+    return obj;
+}
+
+void _export UserInterfaceThread(void)
+{
+    optr focusTree[20], focus;
+    word nFocus;
+
+    memset(&G_oref, 0, sizeof(ObjectRefs));
+
+    if(G_eventType==TET_READ_TREE)
+    {
+      G_oref.treeObj = G_app;
+      G_content = NullOptr;
+      G_UserInterfaceThreadRet = TRUE;
+      return;                           // No need to handle focus
+    }
+
+    /* Test current focus */
+    focus = getFocus(G_app, focusTree, &nFocus, &G_content);
+
+    /* Focussed dialog is FoamDialogProgressClass? Produce indication... */
+    if(IsInHackClass(focus, "foam    ", 0x7b))
+    {
+      G_sayWhat |= SAY_WHAT_IS_PROGRESS;
+    }
+
+    /* Get character affected by backspace */
+    G_lastObjTexts.textObjBackspChar = 
+      (focus==G_lastObj.textObj)? getBackspChar(focus) : 0;
+
+    /* Reinterpret cursor movement as navigation if it caused
+       a focus change */
+    if((G_eventType==TET_SAY_LETTER 
+        || G_eventType==TET_SAY_WORD || G_eventType==TET_SPELL_WORD
+        || G_eventType==TET_SAY_LINE) && focus!=G_lastFocus)
+      G_eventType = TET_NAV_KEY;
+    
+    if(G_eventType==TET_NON_NAV_KEY && focus==G_lastFocus)
+    {
+      G_UserInterfaceThreadRet = FALSE;
+      return;                             // Focus unchanged? Nothing to do
+    }
+    G_lastFocus = focus;                  // Store new focus
+    
+    /* Identify important objects in current scope */
+    getObjects(focus, focusTree, nFocus, &G_oref);
+
+    G_UserInterfaceThreadRet = TRUE;
+}
+
+
+/*
+ ***************************************************************************
+ *              Code running on process thread
+ ***************************************************************************
+ */
+
+void _export CompileOutput(void)
+{
+    int i;
+    WordFlags sayWhat;
+    char label[MAX_TEXT_BUFSIZE],label2[MAX_LABEL_BUFSIZE];
+    TalkEventType tet;
+    dword pos;
+
+    G_sayWhat = 0;
+
+    @CALL_ROUTINE(G_app, UserInterfaceThread)
+    
+    /* Thread check is required for fax viewer's main window where the
+       content object is not on the process thread. */
+    if(G_content && !(G_oref.focusLabel || G_oref.textObj) &&
+       ObjTestIfObjBlockRunByCurThread(OptrToHandle(G_content)))
+    {
+      optr content,focus;
+      
+      focus = getFocus(G_content, NULL, NULL, &content);       
+      getObjectsInContent(focus, &G_oref);
+    }  
+
+    if(!G_UserInterfaceThreadRet)       // Abort if no change detected
+    {
+      return;
+    }
+
+    tet = G_eventType;
+
+    /*
+     * Do we need to speak only an object subtree?
+     */
+    if(tet==TET_READ_TREE)
+    {
+      getObjectTree(G_oref.treeObj, G_lastObjTexts.treeText, sizeof(G_lastObjTexts.treeText));
+      G_sayWhat = SAY_WHAT_TREE;
+      return;
+    }
+   
+    /*
+     * Do we need to perform any actions on an object?
+     */
+    if(tet>=TET_ACTIONS)
+    {
+      /* Only if we have a text object */
+      if(G_oref.textObj &&
+         (G_oref.pseudoCursor==G_oref.textObj
+          || tet!=TET_ACTION_ROUTING_PSEUDO))
+      {
+        doAction(G_oref.textObj, tet, G_eventData);
+        tet = TET_SAY_LINE;
+      }
+      else
+        return;
+    }
+
+    sayWhat = G_sayWhat;                // Nothing to say yet
+
+    /* 
+     * Do we need to speak the label of the dialog? 
+     */
+    if(tet==TET_NAV_KEY || tet==TET_FORCE_VERBOSE || tet==TET_INCR_SEARCH ||
+       G_oref.dialogLabel != G_lastObj.dialogLabel)
+    {
+      getObjectName(G_oref.dialogLabel, label, MAX_TITLE_BUFSIZE);
+      if(!label[0])                     // Default to application name
+        getObjectName(G_app, label, MAX_TITLE_BUFSIZE);
+    }
+
+    /* Update dialog label, speak all if dialog label changes */
+    if(tet==TET_FORCE_VERBOSE
+       || G_oref.dialogLabel != G_lastObj.dialogLabel
+       || ((tet==TET_NAV_KEY || tet==TET_INCR_SEARCH)
+           && strcmp(label, G_lastObjTexts.dialogLabelText)))
+    {
+      strcpy(G_lastObjTexts.dialogLabelText, label);
+      sayWhat |= SAY_WHAT_TITLE;
+      tet = TET_FORCE_VERBOSE;
+      G_oref.pseudoCursor = NullOptr;
+    }
+
+    /*
+     * Do we need to speak any buttons?
+     */
+    for(i=0; i<4; i++)                  // Don't repeat unchanged buttons
+    {
+      if(tet==TET_FORCE_VERBOSE || tet==TET_READ_SOFTKEYS
+         || tet==TET_NAV_KEY || tet==TET_INCR_SEARCH
+         || G_oref.buttonLabels[i] != G_lastObj.buttonLabels[i])
+      {
+        getObjectName(G_oref.buttonLabels[i], label, MAX_BUTTON_BUFSIZE);
+      }
+
+      if(tet==TET_FORCE_VERBOSE || tet==TET_READ_SOFTKEYS
+         || ((tet==TET_NAV_KEY || tet==TET_INCR_SEARCH) 
+             && strcmp(label, G_lastObjTexts.buttonLabelsText[i]))
+         || G_oref.buttonLabels[i] != G_lastObj.buttonLabels[i])
+      {
+        strcpy(G_lastObjTexts.buttonLabelsText[i], label);
+        
+        if(tet==TET_FORCE_VERBOSE || tet==TET_READ_SOFTKEYS ||
+           !(G_oref.flags & ORF_DONT_SPEAK_KEYS))
+        {
+          sayWhat |= (SAY_WHAT_BUTTON1>>i);
+        }
+      }
+    }
+
+    /*
+     * Do we need to mention the status of the menu key?
+     */
+    if(tet==TET_FORCE_VERBOSE || tet==TET_READ_SOFTKEYS)
+      sayWhat |= SAY_WHAT_MENU;
+
+    /* 
+     * Do we need to speak the current focus? 
+     */
+    if(tet==TET_NAV_KEY || tet==TET_FORCE_VERBOSE || tet==TET_INCR_SEARCH
+       || tet==TET_READ_SELECTION || tet==TET_SPELL_SELECTION
+       || G_oref.focusParent != G_lastObj.focusParent
+       || G_oref.focusLabel != G_lastObj.focusLabel
+       || (G_oref.flags & ORF_MENU_MASK) != (G_lastObj.flags & ORF_MENU_MASK))
+    {
+      getObjectName(G_oref.focusParent, label2, MAX_LABEL_BUFSIZE);
+      pos = getObjectName(G_oref.focusLabel, label, MAX_TEXT_BUFSIZE);
+    }
+
+    if(tet==TET_FORCE_VERBOSE || tet==TET_READ_SELECTION || tet==TET_SPELL_SELECTION
+       || G_oref.focusParent != G_lastObj.focusParent
+       || G_oref.focusLabel != G_lastObj.focusLabel
+       || (G_oref.flags & ORF_MENU_MASK) != (G_lastObj.flags & ORF_MENU_MASK)
+       || ((tet==TET_NAV_KEY || tet==TET_INCR_SEARCH)
+           && (strcmp(label2, G_lastObjTexts.focusParentText)
+               || strcmp(label, G_lastObjTexts.focusLabelText))))
+    {
+      strcpy(G_lastObjTexts.focusParentText, label2);
+      strcpy(G_lastObjTexts.focusLabelText, label);
+      sayWhat |= SAY_WHAT_FOCUS;
+
+      /* Put pseudo cursor here if not all spoken */
+      if(pos!=(dword)-1)
+      {
+        G_oref.pseudoCursor = G_oref.focusLabel;
+        G_oldPseudoCursorPos = 0;       // Go back here when interrupted
+        G_pseudoCursorPos = pos;
+        sayWhat |= SAY_WHAT_WILL_CONTINUE;
+      }
+    }
+
+    /* 
+     * Do we need to speak the text object because it is new?
+     */
+    if(G_oref.textObj)
+    {
+      if(tet==TET_FORCE_VERBOSE || tet==TET_READ_SELECTION || tet==TET_SPELL_SELECTION
+         || tet==TET_INCR_SEARCH
+         || ((tet==TET_NAV_KEY || tet==TET_SAY_LINE) 
+             && G_oref.textObj != G_lastObj.textObj))
+      {
+        getTextPart(G_oref.textObj, 
+            (dword)-1, 
+            GET_WHAT_LINE, 
+            G_lastObjTexts.textObjText,
+            sizeof(G_lastObjTexts.textObjText),
+            &G_lastObjTexts.textObjCursorPos,
+            &G_lastObjTexts.textObjCursorPos2);
+        if(tet!=TET_INCR_SEARCH)        // In combined screens, don't speak text
+          sayWhat |= SAY_WHAT_TEXT;     // Speaking newly entered text field
+      }
+
+      /*
+       * Do we need to speak part of the text because we're asked for it?
+       */
+      else if(tet==TET_SAY_LETTER || tet==TET_SAY_WORD || tet==TET_SPELL_WORD 
+              || tet==TET_SAY_LINE || tet==TET_SAY_SELECTED_TEXT)
+      {
+        getTextPart(G_oref.textObj, 
+          (dword)-1, 
+          (tet==TET_SAY_LETTER)?        GET_WHAT_LETTER:
+          (tet==TET_SAY_LINE)?          GET_WHAT_LINE:
+          (tet==TET_SAY_SELECTED_TEXT)? GET_WHAT_SELECTION:
+                                        GET_WHAT_WORD,
+          G_lastObjTexts.textObjText,
+          sizeof(G_lastObjTexts.textObjText),
+          &G_lastObjTexts.textObjCursorPos,
+          &G_lastObjTexts.textObjCursorPos2);
+        sayWhat |= SAY_WHAT_TEXTPART;   // Speaking text we're moving over...
+      }
+    }
+
+    /*
+     * Do we need to speak an object subtree?
+     */
+    if(tet==TET_FORCE_VERBOSE 
+       || ((G_oref.flags & ORF_TREE_TO_FOCUS) && (sayWhat & SAY_WHAT_FOCUS)))
+    {
+      getObjectTree(G_oref.treeObj, G_lastObjTexts.treeText, sizeof(G_lastObjTexts.treeText));
+      sayWhat |= SAY_WHAT_TREE;
+    }
+
+    if(tet==TET_SAY_CONTINUE || tet==TET_SAY_NEXT_LINE || tet==TET_SAY_PREV_LINE)
+    {
+      if(!G_oref.pseudoCursor)
+      {
+        if(G_oref.textObj)
+        {
+          G_oref.pseudoCursor = G_oref.textObj;
+          G_pseudoCursorPos = (dword)-1;
+        }
+        else if(IsInClass(G_oref.focusLabel, VisTextClass))
+        {
+          G_oref.pseudoCursor = G_oref.focusLabel;
+          G_pseudoCursorPos = (dword)-1;
+        }
+      }
+
+      if(G_oref.pseudoCursor)
+      {
+        G_oldPseudoCursorPos = G_pseudoCursorPos;
+        G_pseudoCursorPos = getTextPart(
+          G_oref.pseudoCursor,
+          G_pseudoCursorPos,
+          (tet==TET_SAY_PREV_LINE)? GET_WHAT_PREV_LINE :
+          (tet==TET_SAY_NEXT_LINE)? GET_WHAT_NEXT_LINE :
+                                    GET_WHAT_ALL,
+          G_lastObjTexts.textObjText,
+          sizeof(G_lastObjTexts.textObjText),
+          &G_lastObjTexts.textObjCursorPos,
+          &G_lastObjTexts.textObjCursorPos2);
+        sayWhat |= SAY_WHAT_TEXTPART; // Speaking text in text object
+
+        if(tet==TET_SAY_CONTINUE && G_pseudoCursorPos!=TEXT_ADDRESS_PAST_END)
+          sayWhat |= SAY_WHAT_WILL_CONTINUE;
+      }
+    }
+
+    /* Store for return and next round */
+    G_sayWhat = sayWhat;
+    G_lastObj = G_oref;
+}
+
+void _export UIProgressTest(void)
+{
+    optr focusTree[20], focus;
+    word nFocus;
+
+    /* Test current focus */
+    focus = getFocus(G_app, focusTree, &nFocus, &G_content);
+
+    /* Focussed dialog is FoamDialogProgressClass? Produce indication... */
+    if(IsInHackClass(focus, "foam    ", 0x7b))
+    {
+      G_sayWhat = SAY_WHAT_IS_PROGRESS;
+    }
+    else
+    {
+      G_sayWhat = 0;
+    }
+}

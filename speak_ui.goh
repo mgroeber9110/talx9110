@@ -1,0 +1,700 @@
+/*
+ ***************************************************************************
+ *              UI Objects
+ ***************************************************************************
+ */
+@define ITEM(_name, _str, _id) \
+  @object GenItemClass _name = { GI_visMoniker = _str; GII_identifier = _id; }
+
+@start AppResource;
+  @object SpeakApplicationClass SpeakApp = {
+    GI_visMoniker = "TALX\r9110";
+    GI_comp = @SpeakPrimary, @SerialDialog;
+    GAI_states = @default | AS_AVOID_TRANSPARENT_DETACH;
+    FSAI_launcherApp = FA_EXTRAS_APP;
+    gcnList(MANUFACTURER_ID_GEOWORKS,GAGCNLT_WINDOWS) = @SpeakPrimary;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+    ATTR_GEN_INIT_FILE_CATEGORY = "TALX";
+  }
+@end AppResource;
+
+@start Interface;
+
+@object GenInteractionClass SpeakPrimary = {
+    GII_visibility = GIV_DIALOG;
+    GII_type = GIT_PROPERTIES;
+    GI_comp  = @MainBox,
+               @AboutTALXTrigger,
+               @CloseTrigger,
+               @MenuTrigger,
+               @AboutTALX,
+               @MenuInt;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass MainBox = {
+    ComplexMoniker = GenInteractionClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @OutputGroup,@SpeechOptionsGroup;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+    HINT_DRAW_IN_BOX;
+    HINT_DRAW_SHADOW;
+    HINT_PLACE_MONIKER_ABOVE;
+    HINT_COMPLEX_MONIKER_DRAW_SEPARATOR;
+    HINT_MINIMIZE_CHILD_SPACING;
+    HINT_ORIENT_CHILDREN_VERTICALLY;
+    HINT_CENTER_CHILDREN_ON_MONIKERS;
+    HINT_EXPAND_WIDTH_TO_FIT_PARENT;
+    HINT_EXPAND_HEIGHT_TO_FIT_PARENT;
+    HINT_FIXED_SIZE = {FOAM_DEFAULT_COMPONENT_WIDTH, 0, 0};
+}
+ 
+@end Interface;
+
+@start SynthSettings;
+
+@object GenInteractionClass OutputGroup = {
+    GI_comp = @Output;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass Output = {
+    ComplexMoniker = GenItemGroupClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @NoOutput, @InternalSpeech, @ExternalSpeech, @BrailleHT, @BrailleAL;
+    GIGI_selection = SPEECH_INTERNAL;
+    GIGI_applyMsg = MSG_MAPP_OUTPUT_CHANGED;
+    GIGI_destination = @SpeakApp;
+};
+
+@object GenItemClass NoOutput = {
+    GII_identifier = SPEECH_OFF;
+}
+@object GenItemClass InternalSpeech = {
+    GII_identifier = SPEECH_INTERNAL;
+}
+@object GenItemClass ExternalSpeech = {
+    GII_identifier = SPEECH_EXTERNAL;
+}
+@object GenItemClass BrailleHT = {
+    GII_identifier = SPEECH_HTBRAILLE;
+}
+@object GenItemClass BrailleAL = {
+    GII_identifier = SPEECH_ALBRAILLE;
+}
+
+@object GenInteractionClass SpeechOptionsGroup = {
+    GI_comp = @VolumeGroup,@SpeedGroup,@PitchGroup,
+              @LanguageGroup, @TextLanguageGroup,
+              @EchoGroup, @SpellCapsGroup, @SpellLongGroup, @SpellPunctGroup;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+    HINT_MINIMIZE_CHILD_SPACING;
+    HINT_ORIENT_CHILDREN_VERTICALLY;
+    HINT_CENTER_CHILDREN_ON_MONIKERS;
+    HINT_EXPAND_WIDTH_TO_FIT_PARENT;
+}
+
+@object GenInteractionClass VolumeGroup = {
+    GI_comp = @Volume;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass Volume = {
+    ComplexMoniker = GenItemGroupClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @Volume1, @Volume2, @Volume3, @Volume4, @Volume5;
+    GIGI_selection = 4;
+    GIGI_applyMsg = MSG_MAPP_VOLUME_CHANGED;
+    GIGI_destination = @SpeakApp;
+    ATTR_GEN_INIT_FILE_KEY = "Volume";
+};
+
+@ITEM(Volume1, "1", 1);
+@ITEM(Volume2, "2", 2);
+@ITEM(Volume3, "3", 3);
+@ITEM(Volume4, "4", 4);
+@ITEM(Volume5, "5", 5);
+
+@object GenInteractionClass SpeedGroup = {
+    GI_comp = @Speed;
+    GI_states = @default & ~GS_USABLE;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass Speed  = {
+    ComplexMoniker = GenItemGroupClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @Speedm3, @Speedm2, @Speedm1,
+              @Speed0,
+              @Speed1, @Speed2, @Speed3;
+    GIGI_selection = 0;
+    GIGI_applyMsg = MSG_MAPP_SPEED_CHANGED;
+    GIGI_destination = @SpeakApp;
+    ATTR_GEN_INIT_FILE_KEY = "Speed";
+};
+
+@ITEM(Speedm3, "-3", -3);
+@ITEM(Speedm2, "-2", -2);
+@ITEM(Speedm1, "-1", -1);
+@ITEM(Speed0,  "0",  0);
+@ITEM(Speed1,  "+1",  1);
+@ITEM(Speed2,  "+2",  2);
+@ITEM(Speed3,  "+3",  3);
+
+@object GenInteractionClass PitchGroup = {
+    GI_comp = @Pitch;
+    GI_states = @default & ~GS_USABLE;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass Pitch  = {
+    ComplexMoniker = GenItemGroupClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @Pitchm3, @Pitchm2, @Pitchm1,
+              @Pitch0,
+              @Pitch1, @Pitch2, @Pitch3;
+    GIGI_selection = 0;
+    GIGI_applyMsg = MSG_MAPP_PITCH_CHANGED;
+    GIGI_destination = @SpeakApp;
+    ATTR_GEN_INIT_FILE_KEY = "Pitch";
+};
+
+@ITEM(Pitchm3, "-3", -3);
+@ITEM(Pitchm2, "-2", -2);
+@ITEM(Pitchm1, "-1", -1);
+@ITEM(Pitch0,  "0",  0);
+@ITEM(Pitch1,  "+1",  1);
+@ITEM(Pitch2,  "+2",  2);
+@ITEM(Pitch3,  "+3",  3);
+
+@object GenInteractionClass LanguageGroup = {
+    GI_comp = @Language;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass Language  = {
+    ComplexMoniker = GenItemGroupClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @LanguageNone,
+              @LanguageDE, @LanguageEN, @LanguageIT, @LanguageSE,
+              @LanguageNL/*, @LanguageFR, @LanguageES*/;
+    GIGI_selection = LANG_NONE;
+    GIGI_applyMsg = MSG_MAPP_LANGUAGE_CHANGED;
+    GIGI_destination = @SpeakApp;
+    ATTR_GEN_INIT_FILE_KEY = "Language";
+};
+
+@ITEM(LanguageNone, "", LANG_NONE);
+@ITEM(LanguageDE, "", LANG_GERMAN);
+@ITEM(LanguageEN, "", LANG_ENGLISH);
+@ITEM(LanguageIT, "", LANG_ITALIAN);
+@ITEM(LanguageSE, "", LANG_SWEDISH);
+@ITEM(LanguageNL, "", LANG_DUTCH);
+@ITEM(LanguageFR, "", LANG_FRENCH);
+@ITEM(LanguageES, "", LANG_SPANISH);
+
+@object GenInteractionClass TextLanguageGroup = {
+    GI_comp = @TextLanguage;
+    GI_states = @default & ~GS_ENABLED;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass TextLanguage  = {
+    ComplexMoniker = GenItemGroupClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @TextLanguageOff, @TextLanguageOn;
+    GIGI_selection = FALSE;
+    GIGI_applyMsg = MSG_MAPP_TEXTLANGUAGE_CHANGED;
+    GIGI_destination = @SpeakApp;
+    ATTR_GEN_INIT_FILE_KEY = "TextLanguage";
+};
+
+@ITEM(TextLanguageOff, "", FALSE);
+@ITEM(TextLanguageOn,  "",  TRUE);
+
+@object GenInteractionClass EchoGroup = {
+    GI_comp = @Echo;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass Echo = {
+    ComplexMoniker = GenItemGroupClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @NoEcho, @LetterEcho, @WordEcho, @BothEcho;
+    GIGI_selection = ECHO_LETTERS | ECHO_WORDS;
+    GIGI_applyMsg = MSG_MAPP_ECHO_CHANGED;
+    GIGI_destination = @SpeakApp;
+    ATTR_GEN_INIT_FILE_KEY = "Echo";
+};
+
+@ITEM(NoEcho, "", ECHO_OFF);
+@ITEM(LetterEcho, "", ECHO_LETTERS);
+@ITEM(WordEcho, "", ECHO_WORDS);
+@ITEM(BothEcho, "", ECHO_WORDS | ECHO_LETTERS);
+
+@end SynthSettings;
+
+@start Interface;
+
+@object GenInteractionClass SpellCapsGroup = {
+    GI_comp = @SpellCaps;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass SpellCaps  = {
+    ComplexMoniker = GenItemGroupClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @SpellCapsOff, @SpellCapsOn;
+    GIGI_selection = FALSE;
+    GIGI_applyMsg = MSG_MAPP_SPELLCAPS_CHANGED;
+    GIGI_destination = @SpeakApp;
+    ATTR_GEN_INIT_FILE_KEY = "SpellCaps";
+};
+
+@ITEM(SpellCapsOff, "", FALSE);
+@ITEM(SpellCapsOn,  "", TRUE);
+
+@object GenInteractionClass SpellLongGroup = {
+    GI_comp = @SpellLong;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass SpellLong  = {
+    ComplexMoniker = GenItemGroupClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @SpellLongOff, @SpellLongOn;
+    GIGI_selection = FALSE;
+    GIGI_applyMsg = MSG_MAPP_SPELLLONG_CHANGED;
+    GIGI_destination = @SpeakApp;
+    ATTR_GEN_INIT_FILE_KEY = "SpellLong";
+};
+
+@ITEM(SpellLongOff, "", FALSE);
+@ITEM(SpellLongOn,  "",  TRUE);
+
+@object GenInteractionClass SpellPunctGroup = {
+    GI_comp = @SpellPunct;
+    ATTR_GEN_INIT_FILE_PROPAGATE_TO_CHILDREN;
+}
+
+@object ComplexMonikerClass SpellPunct  = {
+    ComplexMoniker = GenItemGroupClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @SpellPunctNone, @SpellPunctSome, @SpellPunctMost, @SpellPunctAll;
+    GIGI_selection = 2;
+    GIGI_applyMsg = MSG_MAPP_SPELLPUNCT_CHANGED;
+    GIGI_destination = @SpeakApp;
+    ATTR_GEN_INIT_FILE_KEY = "SpellPunct";
+};
+
+@ITEM(SpellPunctNone, "", 0);
+@ITEM(SpellPunctSome, "", 1);
+@ITEM(SpellPunctMost, "", 2);
+@ITEM(SpellPunctAll,  "", 3);
+
+@object ComplexMonikerClass AboutTALXTrigger = {
+    ComplexMoniker = GenTriggerClass;
+    GTI_actionMsg = MSG_GEN_INTERACTION_INITIATE;
+    GTI_destination = @AboutTALX;
+
+    HINT_SEEK_MENU_BAR;
+    HINT_SEEK_REPLY_BAR;
+    HINT_SEEK_SLOT = 2;
+}
+
+@object ComplexMonikerClass CloseTrigger = {
+    ComplexMoniker = GenTriggerClass;
+    CMI_topText = CMT_CLOSE;
+    GTI_actionMsg = MSG_FSA_RETURN_TO_LAUNCHER;
+    GTI_destination = @SpeakApp;
+
+    HINT_SEEK_MENU_BAR;
+    HINT_SEEK_REPLY_BAR;
+    HINT_SEEK_SLOT = 3;
+}
+
+@object ComplexMonikerClass MenuTrigger = {
+    ComplexMoniker = GenTriggerClass;
+
+    CMI_topText = CMT_MENU;
+
+    GTI_actionMsg = MSG_GEN_INTERACTION_INITIATE;
+    GTI_destination = @MenuInt;
+
+    HINT_SEEK_MENU_BAR;
+    HINT_SEEK_REPLY_BAR;
+}
+
+@end Interface;
+
+@start Dialogs;
+
+/*
+ * Menu
+ */
+
+@object GenInteractionClass MenuInt = {
+    GI_comp = @MenuApplyTrigger,@Menu;
+    GII_visibility = GIV_POPUP;
+    GII_attrs = @default | GIA_NOT_USER_INITIATABLE | GIA_MODAL;
+}
+
+@object ComplexMonikerClass Menu = {
+    ComplexMoniker = GenInteractionClass;
+
+    CMI_topText = CMT_MENU;
+
+    GI_comp = @EnableAutostartTrigger,
+              @DisableAutostartTrigger,
+              @ExitTrigger;
+
+    HINT_PLACE_MONIKER_ABOVE;
+    HINT_PLACE_MONIKER_TO_LEFT;
+    HINT_EXPAND_WIDTH_TO_FIT_PARENT;
+    HINT_EXPAND_HEIGHT_TO_FIT_PARENT;
+    HINT_MINIMIZE_CHILD_SPACING;        /* naeher zusammenruecken */
+    HINT_INDENT_CHILDREN = {SST_PIXELS | 10};
+                                        /* Einruecken */
+    HINT_COMPLEX_MONIKER_DRAW_SEPARATOR;
+}
+
+@object ComplexMonikerClass MenuApplyTrigger = {
+    ComplexMoniker = GenTriggerClass;
+
+    CMI_topText = CMT_SELECT;
+
+    GI_attrs = @default | GA_SIGNAL_INTERACTION_COMPLETE;
+
+    HINT_SEEK_MENU_BAR;
+    HINT_SEEK_REPLY_BAR;
+    HINT_SEEK_SLOT = 0;
+
+    ATTR_GEN_TRIGGER_INTERACTION_COMMAND = IC_APPLY;
+    HINT_DEFAULT_DEFAULT_ACTION;
+}
+
+@object GenTriggerClass EnableAutostartTrigger = {
+    GTI_actionMsg = MSG_SPEAK_PROC_ENABLE_AUTOSTART;
+    GTI_destination = process;
+}
+
+@object GenTriggerClass DisableAutostartTrigger = {
+    GTI_actionMsg = MSG_SPEAK_PROC_DISABLE_AUTOSTART;
+    GTI_destination = process;
+}
+
+@object GenTriggerClass ExitTrigger = {
+    GTI_actionMsg = MSG_SPEAK_PROC_EXIT;
+    GTI_destination = process;
+}
+
+/*
+ * Serial Number Entry
+ */
+@object GenInteractionClass SerialDialog = {
+    GII_visibility = GIV_POPUP;
+    GII_type = GIT_COMMAND;
+    GI_comp  = @SerialOKButton, @SerialBox;
+    HINT_SIZE_WINDOW_AS_DESIRED;
+}
+
+@object ComplexMonikerClass SerialOKButton = {
+    ComplexMoniker = GenTriggerClass;
+    CMI_topText = CMT_OK;
+    GI_states = @default & ~GS_ENABLED;
+    GI_attrs = @default | GA_SIGNAL_INTERACTION_COMPLETE;
+    GTI_destination = process;
+    GTI_actionMsg = MSG_SPEAK_PROC_TEST_SERIAL;
+    HINT_SEEK_REPLY_BAR;
+    HINT_SEEK_SLOT = 0;
+}
+
+@object ComplexMonikerClass SerialBox = {
+    ComplexMoniker = GenInteractionClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    CMI_iconBitmap = CMB_INPUT_TITLE_ICON;
+    GI_comp = @SerialGreyFrame;
+
+    ATTR_COMPLEX_MONIKER_PLACE_BITMAP_AT_LEFT;
+    HINT_COMPLEX_MONIKER_DRAW_SEPARATOR;
+    HINT_PLACE_MONIKER_ABOVE;
+    HINT_EXPAND_WIDTH_TO_FIT_PARENT;
+    HINT_EXPAND_HEIGHT_TO_FIT_PARENT;
+    HINT_ORIENT_CHILDREN_VERTICALLY;
+    HINT_INDENT_CHILDREN = 0;
+    HINT_FULL_JUSTIFY_CHILDREN_VERTICALLY;
+    HINT_INCLUDE_ENDS_IN_CHILD_SPACING;
+}
+
+@chunk TCHAR SerialGreyFrameTitle[] = "";
+@object ComplexMonikerClass SerialGreyFrame = {
+    ComplexMoniker = GreyFrameClass;
+    GI_comp = @SerialTextField;
+    CMI_iconBitmap = CMB_INPUT_TITLE_ICON;
+    CMI_topText = @SerialGreyFrameTitle;
+    HINT_ORIENT_CHILDREN_HORIZONTALLY;
+    HINT_PLACE_MONIKER_TO_RIGHT;
+}
+
+@object GenTextClass SerialTextField = {
+    GTXI_maxLength = SERIAL_LENGTH;
+    GTXI_attrs = @default | GTA_SINGLE_LINE_TEXT;
+    ATTR_GEN_TEXT_SIGNED_DECIMAL;    
+    HINT_FIXED_SIZE = {10 | SST_WIDE_CHAR_WIDTHS, 0, 0};
+    ATTR_GEN_TEXT_SET_OBJECT_ENABLED_WHEN_TEXT_EXISTS = @SerialOKButton;
+}
+
+/*
+ * About window
+ */
+@object GenInteractionClass AboutTALX = {
+    GII_visibility = GIV_DIALOG;
+    GII_type = GIT_COMMAND;
+    GII_attrs = @default | GIA_NOT_USER_INITIATABLE;
+    GI_comp  = @AboutBox;    
+}
+
+@object ComplexMonikerClass AboutBox = {
+    ComplexMoniker = GenInteractionClass;
+    CMI_fontSize = FOAM_NORMAL_FONT_SIZE;
+    GI_comp = @AboutText;
+    HINT_DRAW_IN_BOX;
+    HINT_DRAW_SHADOW;
+    HINT_PLACE_MONIKER_ABOVE;
+    HINT_EXPAND_WIDTH_TO_FIT_PARENT;
+    HINT_EXPAND_HEIGHT_TO_FIT_PARENT;
+    HINT_CENTER_CHILDREN_VERTICALLY;
+    HINT_COMPLEX_MONIKER_DRAW_SEPARATOR;
+    HINT_FIXED_SIZE = {FOAM_DEFAULT_COMPONENT_WIDTH, 0, 0};
+}
+
+@chunk char AboutTextChunk[] = "";
+
+const char AboutTextTemplate[] = 
+  "TALX 9110\r"
+  "Copyright 2001-2002 Marcus Gr" "\x9A" "ber, Torsten Brand\r"
+  PL("CopyLoc")"\r"
+  "Internet: http://www.talx.de\r"
+  PL("CopyLoc2")"\r\r"
+  "Version: " VERSION " (" __DATE__ ")\r";
+
+@object GenTextClass AboutText = {
+  GI_attrs = @default | GA_READ_ONLY;
+  GTXI_text = @AboutTextChunk;
+  ATTR_GEN_TEXT_DEFAULT_PARA_ATTR = DEF_PARA_ATTR_CENTER;
+  HINT_EXPAND_WIDTH_TO_FIT_PARENT;
+}
+@end Dialogs;
+
+@start Strings, data;
+
+@chunk char SerialTitle[] = "";
+
+@chunk char InvalidSerial[] = "";
+
+@chunk char TALXFull[] = "";
+@chunk char TALXDemo[] = "";
+
+@chunk char KeyboardTrainingOn[] = "";
+@chunk char KeyboardTrainingOff[] = "";
+
+@chunk char ConfirmDisableAuto[] = "";
+@chunk char ConfirmExit[] = "";
+
+@end Strings;
+
+/*
+ ***************************************************************************
+ *              Hotkey definitions and names
+ ***************************************************************************
+ */
+
+MacroHotkeyList hotkeys[]={
+  {MAKE_SHORTCUT(CS_UI_FUNCS, UC_ZOOM),         @SpeakApp, MSG_MAPP_READ_WINDOW},
+  {MAKE_SHORTCUT(CS_UI_FUNCS, UC_BACKLIGHT),    @SpeakApp, MSG_MAPP_BRING_TO_FRONT},
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F1),           @SpeakApp, MSG_MAPP_INVOKE_HELP}, 
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F2),           @SpeakApp, MSG_MAPP_READ_SOFTKEYS}, 
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F3),           @SpeakApp, MSG_MAPP_READ_DATE_TIME}, 
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F4),           @SpeakApp, MSG_MAPP_READ_INDICATOR}, 
+  {MAKE_SHORTCUT(CS_UI_FUNCS, UC_MENU),         @SpeakApp, MSG_MAPP_TRAINING_ENABLE},
+
+  {MAKE_SHORTCUT(CS_CONTROL, VC_UP),            @SpeakApp, MSG_MAPP_READ_SELECTION}, 
+  {MAKE_SHORTCUT(CS_CONTROL, VC_UP)|KS_CTRL,    @SpeakApp, MSG_MAPP_SPELL_SELECTION}, 
+  {MAKE_SHORTCUT(CS_CONTROL, VC_RIGHT),         @SpeakApp, MSG_MAPP_SAY_WORD}, 
+  {MAKE_SHORTCUT(CS_CONTROL, VC_RIGHT)|KS_CTRL, @SpeakApp, MSG_MAPP_SPELL_WORD}, 
+  {MAKE_SHORTCUT(CS_CONTROL, VC_LEFT),          @SpeakApp, MSG_MAPP_SAY_LETTER}, 
+  {MAKE_SHORTCUT(CS_CONTROL, VC_DOWN),          @SpeakApp, MSG_MAPP_SAY_CONTINUE}, 
+  {MAKE_SHORTCUT(CS_CONTROL, VC_DOWN)|KS_SHIFT, @SpeakApp, MSG_MAPP_SAY_SELECTED_TEXT},
+
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F5),           @SpeakApp, MSG_MAPP_NEXT_ECHO},
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F6),           @SpeakApp, MSG_MAPP_NEXT_SPELLCAPS},
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F7),           @SpeakApp, MSG_MAPP_NEXT_SPELLLONG},
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F8),           @SpeakApp, MSG_MAPP_NEXT_SPELLPUNCT},
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F9),           @SpeakApp, MSG_MAPP_PREV_SPEED}, 
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F10),          @SpeakApp, MSG_MAPP_NEXT_SPEED}, 
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F11),          @SpeakApp, MSG_MAPP_PREV_VOLUME}, 
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F12),          @SpeakApp, MSG_MAPP_NEXT_VOLUME}, 
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_F12)|KS_CTRL,  @SpeakApp, MSG_MAPP_SWAP_DEVICE},
+  {MAKE_SHORTCUT(CS_CONTROL,  VC_BACKSPACE),    @SpeakApp, MSG_MAPP_NEXT_LANGUAGE},
+  {MAKE_SHORTCUT(CS_BSW,      ' '),             @SpeakApp, MSG_MAPP_NEXT_TEXTLANGUAGE},
+
+  {MAKE_SHORTCUT(CS_BSW,      '1'),             @SpeakApp, MSG_MAPP_TOGGLE_RECORDING}, 
+
+  /* end of list */
+  {0, NullOptr, 0}
+};
+
+@start KeyTable, data;
+
+@chunk struct keyTable_struct keyTableChunk[] = {
+  MAKE_SHORTCUT( CS_UI_FUNCS, UC_MENU ),     SPKALWAYS | NAVKEY, PL("Menu"),
+  MAKE_SHORTCUT( CS_UI_FUNCS, UC_IR),        SPKALWAYS | NAVKEY, PL("Infra"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_F1 ),        SPKALWAYS | NAVKEY, PL("Key") " 1 ",
+  MAKE_SHORTCUT( CS_CONTROL, VC_F2 ),        SPKALWAYS | NAVKEY, PL("Key") " 2 ",
+  MAKE_SHORTCUT( CS_CONTROL, VC_F3 ),        SPKALWAYS | NAVKEY, PL("Key") " 3 ",
+  MAKE_SHORTCUT( CS_CONTROL, VC_F4 ),        SPKALWAYS | NAVKEY, PL("Key") " 4 ",
+  MAKE_SHORTCUT( CS_CONTROL, VC_F5 ),        SPKALWAYS | NAVKEY, PL("App1"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_F6 ),        SPKALWAYS | NAVKEY, PL("App2"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_F7 ),        SPKALWAYS | NAVKEY, PL("App3"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_F8 ),        SPKALWAYS | NAVKEY, PL("App4"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_F9 ),        SPKALWAYS | NAVKEY, PL("App5"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_F10 ),       SPKALWAYS | NAVKEY, PL("App6"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_F11 ),       SPKALWAYS | NAVKEY, PL("App7"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_F12 ),       SPKALWAYS | NAVKEY, PL("App8"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_F12 ) | KS_CTRL, SPKALWAYS| NAVKEY, PL("App9"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_TAB ),       SPKALWAYS | NAVKEY, PL("Tab"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_TAB ) | KS_SHIFT, SPKALWAYS | NAVKEY, PL("BTab"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_LCTRL ) | KS_CTRL, 0, PL("Ctrl"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_LSHIFT ),    0, PL("Shift"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_ALT_GR ) | KS_CTRL | KS_ALT, 0, PL("Chr"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_CAPSLOCK ) | KS_CTRL | KS_ALT, SPKALWAYS, PL("CapsOn"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_CAPSLOCK ), SPKALWAYS, PL("CapsOff"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_ENTER ),     SPKALWAYS | NAVKEY, PL("Enter"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_BACKSPACE ), SPKALWAYS, PL("Backsp"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_UP ),        NAVKEY, PL("Up"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_DOWN ),      NAVKEY, PL("Down"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_LEFT ),      NAVKEY, PL("Left"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_RIGHT ),     NAVKEY, PL("Right"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_INS ),       SPKALWAYS, PL("Help"),
+  MAKE_SHORTCUT( CS_UI_FUNCS, UC_ZOOM ),     SPKALWAYS, PL("Zoom"),
+  MAKE_SHORTCUT( CS_UI_FUNCS, UC_BACKLIGHT ),SPKALWAYS, PL("Backl"),  
+  MAKE_SHORTCUT( CS_UI_FUNCS, UC_ZOOM ) | KS_PHYSICAL, SPKALWAYS, PL("ReadWin"),
+  MAKE_SHORTCUT( CS_UI_FUNCS, UC_BACKLIGHT ) | KS_PHYSICAL, SPKALWAYS, PL("Front"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F1 ) | KS_PHYSICAL, SPKALWAYS, PL("Help"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F2 ) | KS_PHYSICAL, SPKALWAYS, PL("Softkey"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F3 ) | KS_PHYSICAL, SPKALWAYS, PL("ReadTim"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F4 ) | KS_PHYSICAL, SPKALWAYS, PL("Indic"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F5 ) | KS_PHYSICAL, SPKALWAYS, PL("ChgEcho"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F6 ) | KS_PHYSICAL, SPKALWAYS, PL("ChgCaps"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F7 ) | KS_PHYSICAL, SPKALWAYS, PL("ChgLong"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F8 ) | KS_PHYSICAL, SPKALWAYS, PL("ChgPunc"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F9 ) | KS_PHYSICAL, SPKALWAYS, PL("PSpeed"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F10 ) | KS_PHYSICAL, SPKALWAYS, PL("NSpeed"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F11 ) | KS_PHYSICAL, SPKALWAYS, PL("PVol"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_F12 ) | KS_PHYSICAL, SPKALWAYS, PL("NVol"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_UP ) | KS_PHYSICAL, SPKALWAYS, PL("ReadL"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_UP ) | KS_CTRL | KS_PHYSICAL, SPKALWAYS, PL("SpellL"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_RIGHT ) | KS_PHYSICAL, SPKALWAYS, PL("ReadW"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_RIGHT ) | KS_CTRL | KS_PHYSICAL, SPKALWAYS, PL("SpellW"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_LEFT ) | KS_PHYSICAL, SPKALWAYS, PL("ReadC"),
+  MAKE_SHORTCUT( CS_CONTROL,  VC_DOWN ) | KS_PHYSICAL, SPKALWAYS, PL("ReadCur"),
+  MAKE_SHORTCUT( CS_BSW,      'p' ) | KS_CTRL, SPKALWAYS | NAVKEY, PL("CtrlP"),
+  MAKE_SHORTCUT( CS_BSW,      'n' ) | KS_CTRL, SPKALWAYS | NAVKEY, PL("CtrlN"),
+  MAKE_SHORTCUT( CS_BSW,      'h' ) | KS_CTRL, SPKALWAYS, PL("CtrlH"),
+  MAKE_SHORTCUT( CS_BSW,      'e' ) | KS_CTRL, SPKALWAYS, PL("CtrlE"),
+  MAKE_SHORTCUT( CS_BSW,      'c' ) | KS_CTRL, SPKALWAYS, PL("CtrlC"),
+  MAKE_SHORTCUT( CS_BSW,      'x' ) | KS_CTRL, SPKALWAYS, PL("CtrlX"),
+  MAKE_SHORTCUT( CS_BSW,      'v' ) | KS_CTRL, SPKALWAYS, PL("CtrlV"),
+  MAKE_SHORTCUT( CS_BSW,      't' ) | KS_CTRL, SPKALWAYS, PL("CtrlT"),
+  MAKE_SHORTCUT( CS_BSW,      'd' ) | KS_CTRL, SPKALWAYS, PL("CtrlD"),
+  MAKE_SHORTCUT( CS_BSW,      'm' ) | KS_CTRL, SPKALWAYS, PL("CtrlM"),
+  MAKE_SHORTCUT( CS_BSW,      ' ' ) | KS_CTRL, NAVKEY, PL("CtrlSpc"),
+  MAKE_SHORTCUT( CS_CONTROL, VC_BACKSPACE ) | KS_PHYSICAL, SPKALWAYS, PL("ChgLang"),
+  MAKE_SHORTCUT( CS_BSW,      ' ' ) | KS_PHYSICAL, NAVKEY, PL("ChgTxtL"),
+  0, 0, 0
+};
+
+@chunk struct resTable_struct resTableChunk[] = {
+  {@MainBox,            PL("RTALXFul"),         RES_CM},
+
+  {@OutputGroup,        PL("ROutput"),          RES_VM},
+  {@Output,             PL("ROutput"),          RES_CM},
+  {@NoOutput,           PL("RNoOut"),           RES_VM},
+  {@InternalSpeech,     PL("RIntOut"),          RES_VM},
+  {@ExternalSpeech,     PL("RExtOut"),          RES_VM},
+  {@BrailleHT,          PL("RBrOut"),           RES_VM},
+  {@BrailleAL,          PL("RBrAOut"),          RES_VM},
+
+  {@VolumeGroup,        PL("RVolume"),          RES_VM},
+  {@Volume,             PL("RVolume"),          RES_CM},
+  {@Volume4,            "4" PL("RStd"),         RES_VM},
+
+  {@SpeedGroup,         PL("RSpeed"),           RES_VM},
+  {@Speed,              PL("RSpeed"),           RES_CM},
+  {@Speed0,             "0" PL("RStd"),         RES_VM},
+
+  {@PitchGroup,         PL("RPitch"),           RES_VM},
+  {@Pitch,              PL("RPitch"),           RES_CM},
+  {@Pitch0,             "0" PL("RStd"),         RES_VM},
+
+  {@LanguageGroup,      PL("RLanguag"),         RES_VM},
+  {@Language,           PL("RLanguag"),         RES_CM},
+  {@LanguageNone,       PL("RLngNone"),         RES_VM},
+  {@LanguageDE,         PL("RLngDE"),           RES_VM},
+  {@LanguageEN,         PL("RLngEN"),           RES_VM},
+  {@LanguageIT,         PL("RLngIT"),           RES_VM},
+  {@LanguageSE,         PL("RLngSE"),           RES_VM},
+  {@LanguageNL,         PL("RLngNL"),           RES_VM},
+  {@LanguageFR,         PL("RLngFR"),           RES_VM},
+  {@LanguageES,         PL("RLngES"),           RES_VM},
+
+  {@TextLanguageGroup,  PL("RTextLng"),         RES_VM},
+  {@TextLanguage,       PL("RTextLng"),         RES_CM},
+  {@TextLanguageOff,    PL("RNo"),              RES_VM},
+  {@TextLanguageOn,     PL("RYes"),             RES_VM},
+
+  {@EchoGroup,          PL("REcho"),            RES_VM},
+  {@Echo,               PL("REcho"),            RES_CM},
+  {@NoEcho,             PL("REchoNo"),          RES_VM},
+  {@LetterEcho,         PL("REchoLet"),         RES_VM},
+  {@WordEcho,           PL("REchoWor"),         RES_VM},
+  {@BothEcho,           PL("REchoBot"),         RES_VM},
+
+  {@SpellCapsGroup,     PL("RSpeakUC"),         RES_VM},
+  {@SpellCaps,          PL("RSpeakUC"),         RES_CM},
+  {@SpellCapsOff,       PL("RNo"),              RES_VM},
+  {@SpellCapsOn,        PL("RYes"),             RES_VM},
+
+  {@SpellLongGroup,     PL("RSpAlpha"),         RES_VM},
+  {@SpellLong,          PL("RSpAlpha"),         RES_CM},
+  {@SpellLongOff,       PL("RSpAlph0"),         RES_VM},
+  {@SpellLongOn,        PL("RSpAlph1"),         RES_VM},
+
+  {@SpellPunctGroup,    PL("RSpPunct"),         RES_VM},
+  {@SpellPunct,         PL("RSpPunct"),         RES_CM},
+  {@SpellPunctNone,     PL("RSpPunc0"),         RES_VM},
+  {@SpellPunctSome,     PL("RSpPunc1"),         RES_VM},
+  {@SpellPunctMost,     PL("RSpPunc2"),         RES_VM},
+  {@SpellPunctAll,      PL("RSpPunc3"),         RES_VM},
+
+  {@AboutTALXTrigger,   PL("RAbout"),           RES_CM},
+  {@EnableAutostartTrigger, PL("RAutoEna"),     RES_VM},
+  {@DisableAutostartTrigger, PL("RAutoDis"),    RES_VM},
+  {@ExitTrigger,        PL("RExit"),            RES_VM},
+
+  {@AboutBox,           PL("RAboutT"),          RES_CM},
+
+  {@SerialTitle,        PL("RSerial"),          RES_CH},
+  {@InvalidSerial,      PL("RInvSer"),          RES_CH},
+  {@TALXFull,           PL("RTALXFul"),         RES_CH},
+  {@TALXDemo,           PL("RTALXDem"),         RES_CH},
+  {@KeyboardTrainingOn, PL("RTrMoEna"),         RES_CH},
+  {@KeyboardTrainingOff,PL("RTrMoDis"),         RES_CH},
+
+  {@ConfirmDisableAuto, PL("ConfAuto"),         RES_CH},
+  {@ConfirmExit,        PL("ConfExit"),         RES_CH},
+
+  {0,                   "",                     0}
+};
+
+@end KeyTable;

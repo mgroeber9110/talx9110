@@ -1,0 +1,30 @@
+#
+# THIS FILE HAS BEEN GENERATED AUTOMATICALLY.
+#
+# If you edit it, you will lose your changes, should it be regenerated.
+#
+GEODE           = speak
+ASM_TO_OBJS     = GSPARSE.ASM macroeng.asm
+UI_TO_RDFS      =
+SRCS            = GSPARSE.ASM macroeng.asm macroeng.def braille.h\
+                  brail_al.h brail_ht.h macroeng.h voice.h braille.goc\
+                  brail_al.goc brail_ht.goc objid.goc speak.goc synth.goc\
+                  common.goh speak_ui.goh
+OBJS            = GSPARSE.obj macroeng.obj braille.obj brail_al.obj\
+                  brail_ht.obj objid.obj speak.obj synth.obj
+LOBJS           =
+
+SYSMAKEFILE     = geode.mk
+
+#include <geos.mk>
+#include <gpath.mk>
+
+#if exists(local.mk)
+#include "local.mk"
+#else
+#include <$(SYSMAKEFILE)>
+#endif
+
+#if exists($(DEPFILE))
+#include "$(DEPFILE)"
+#endif

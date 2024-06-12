@@ -1,0 +1,255 @@
+
+178      Ctrl-A
+1278     Ctrl-B
+1478     Ctrl-C
+14578    Ctrl-D
+1578     Ctrl-E
+12478    Ctrl-F
+124578   Ctrl-G
+12578    Ctrl-H
+2478     Ctrl-I
+24578    Ctrl-J
+1378     Ctrl-K
+12378    Ctrl-L
+13478    Ctrl-M
+134578   Ctrl-N
+13578    Ctrl-O
+123478   Ctrl-P
+1234578  Ctrl-Q
+123578   Ctrl-R
+23478    Ctrl-S
+234578   Ctrl-T
+13678    Ctrl-U
+123678   Ctrl-V
+245678   Ctrl-W
+134678   Ctrl-X
+1345678  Ctrl-Y
+135678   Ctrl-Z
+1235678  Escape
+
+
+
+
+         Leerzeichen
+5        Ausrufungszeichen
+4        Anf¸hrungszeichen
+3456     Nummernzeichen
+46       Dollar-Zeichen
+123456   Prozentzeichen
+12346    Kaufm‰nnisches "und"
+6        Apostroph (Auslassungszeichen)
+236      Runde Klammer links
+356      Runde Klammer rechts
+35       Stern
+235      Pluszeichen
+2        Komma (Beistrich)
+36       Mittestrich  (Trennungsstrich, Minuszeichen)
+3        Punkt
+256      Schr‰gstrich
+346      Ziffer Null
+16       Ziffer Eins
+126      Ziffer Zwei
+146      Ziffer Drei
+1456     Ziffer Vier
+156      Ziffer F¸nf
+1246     Ziffer Sechs
+12456    Ziffer Sieben
+1256     Ziffer Acht
+246      Ziffer Neun
+25       Doppelpunkt
+23       Semikolon (Strichpunkt)
+56       Kleiner als-Zeichen
+2356     Gleichheitszeichen
+45       Grˆﬂer als-Zeichen
+26       Fragezeichen
+3457     Kaufm‰nnisches "a" / Klammeraffe
+17       Groﬂbuchstabe A
+127      Groﬂbuchstabe B
+147      Groﬂbuchstabe C
+1457     Groﬂbuchstabe D
+157      Groﬂbuchstabe E
+1247     Groﬂbuchstabe F
+12457    Groﬂbuchstabe G
+1257     Groﬂbuchstabe H
+247      Groﬂbuchstabe I
+2457     Groﬂbuchstabe J
+137      Groﬂbuchstabe K
+1237     Groﬂbuchstabe L
+1347     Groﬂbuchstabe M
+13457    Groﬂbuchstabe N
+1357     Groﬂbuchstabe O
+12347    Groﬂbuchstabe P
+123457   Groﬂbuchstabe Q
+12357    Groﬂbuchstabe R
+2347     Groﬂbuchstabe S
+23457    Groﬂbuchstabe T
+1367     Groﬂbuchstabe U
+12367    Groﬂbuchstabe V
+24567    Groﬂbuchstabe W
+13467    Groﬂbuchstabe X
+134567   Groﬂbuchstabe Y
+13567    Groﬂbuchstabe Z
+123567   Eckige Klammer links
+347      umgekehrter Schr‰gstrich
+234567   Eckige Klammer rechts
+23467    Zirkumflex
+4567     Unterstrich
+345      Gravis
+1        Kleinbuchstabe a
+12       Kleinbuchstabe b
+14       Kleinbuchstabe c
+145      Kleinbuchstabe d
+15       Kleinbuchstabe e
+124      Kleinbuchstabe f
+1245     Kleinbuchstabe g
+125      Kleinbuchstabe h
+24       Kleinbuchstabe i
+245      Kleinbuchstabe j
+13       Kleinbuchstabe k
+123      Kleinbuchstabe l
+134      Kleinbuchstabe m
+1345     Kleinbuchstabe n
+135      Kleinbuchstabe o
+1234     Kleinbuchstabe p
+12345    Kleinbuchstabe q
+1235     Kleinbuchstabe r
+234      Kleinbuchstabe s
+2345     Kleinbuchstabe t
+136      Kleinbuchstabe u
+1236     Kleinbuchstabe v
+2456     Kleinbuchstabe w
+1346     Kleinbuchstabe x
+13456    Kleinbuchstabe y
+1356     Kleinbuchstabe z
+12356    Geschweifte Klammer links
+34       Senkrechter Strich
+23456    Geschweifte Klammer rechts
+2346     Tilde
+456      DEL / Lˆschzeichen
+567      Groﬂbuchstabe A mit Umlautzeichen
+34567    Groﬂbuchstabe A mit Ringel
+123467   Groﬂbuchstabe C mit Cedille
+1234567  Groﬂbuchstabe E mit Akut
+2567     Groﬂbuchstabe N mit Tilde
+358      Groﬂbuchstabe O mit Umlautzeichen
+2368     Groﬂbuchstabe U mit Umlautzeichen
+168      Kleinbuchstabe a mit Akut
+123568   Kleinbuchstabe a mit Gravis
+1678     Kleinbuchstabe a mit Zirkumflex
+3458     Kleinbuchstabe a mit Umlautzeichen
+34678    Kleinbuchstabe a mit Tilde
+345678   Kleinbuchstabe a mit Ringel
+1234678  Kleinbuchstabe c mit Cedille
+1234568  Kleinbuchstabe e mit Akut
+23468    Kleinbuchstabe e mit Gravis
+12678    Kleinbuchstabe e mit Zirkumflex
+12468    Kleinbuchstabe e mit Umlautzeichen
+1468     Kleinbuchstabe i mit Akut
+348      Kleinbuchstabe i mit Gravis
+14678    Kleinbuchstabe i mit Zirkumflex
+124568   Kleinbuchstabe i mit Umlautzeichen
+13458    Kleinbuchstabe n mit Tilde
+14568    Kleinbuchstabe o mit Akut
+3468     Kleinbuchstabe o mit Gravis
+145678   Kleinbuchstabe o mit Zirkumflex
+2468     Kleinbuchstabe o mit Umlautzeichen
+1358     Kleinbuchstabe o mit Tilde
+1568     Kleinbuchstabe u mit Akut
+234568   Kleinbuchstabe u mit Gravis
+15678    Kleinbuchstabe u mit Zirkumflex
+12568    Kleinbuchstabe u mit Umlautzeichen
+1248     Kreuz
+4568     Gradzeichen, Ringel
+58       Cent-Zeichen
+467      Pfund-Zeichen
+357      Paragraph-Zeichen
+37       Mittepunkt
+1458     Pilcrow-Zeichen
+34568    Kleinbuchstabe scharfes s, Kleinbuchstabe beta
+12358    Warenzeichen, registered trademark
+123468   Urheberrechtszeichen, copyright
+1245678  Trademark
+568      Akut
+48       Umlautzeichen
+
+47       Groﬂbuchstabe AE Doppellaut
+2467     Groﬂbuchstabe O mit Querstrich
+         Unendlich
+23578    Plus/Minus-Zeichen
+         Kleiner gleich
+         Grˆﬂer gleich
+468      Yen-Zeichen
+1348     Mikro-Zeichen, Kleinbuchstabe my
+
+
+
+         Pi
+
+1258     Ordnungs-/Gattungszeichen, weiblich
+2458     Ordnungs-/Gattungszeichen, m‰nnlich
+         Omega
+478      Kleinbuchstabe ae Doppellaut
+24678    Kleinbuchstabe o mit Querstrich
+38       Umgekehrtes Fragezeichen
+367      Umgekehrtes Ausrufezeichen
+25678    "Nicht"-Zeichen, logische Negation
+         Wurzel
+78       Florin
+         Ungefaehr gleich
+
+5678     Winkelanf¸hrungszeichen links
+4578     Winkelanf¸hrungszeichen rechts
+238      Drei Punkte
+7        Dauerleerzeichen
+23678    Groﬂbuchstabe A mit Gravis
+3467     Groﬂbuchstabe A mit Tilde
+267      Groﬂbuchstabe O mit Tilde
+237      O E Doppellaut
+67       o e Doppellaut
+2378     Gedankenstrich
+13568    Langer Gedankenstrich
+
+
+
+125678   Divisions-Zeichen
+
+134568   Kleinbuchstabe y mit Umlautzeichen
+12345678 Groﬂbuchstabe Y mit Umlautzeichen
+
+4678     Allgemeines W‰hrungszeichen
+
+
+24568    Kleinbuchstabe y mit Akut
+3568     Groﬂbuchstabe Y mit Akut
+12458    Doppelkreuz
+
+
+
+248      Promille
+167      Groﬂbuchstabe A mit Zirkumflex
+1267     Groﬂbuchstabe E mit Zirkumflex
+28       Groﬂbuchstabe A mit Akut
+2358     Groﬂbuchstabe E mit Umlautzeichen
+3578     Groﬂbuchstabe E mit Gravis
+258      Groﬂbuchstabe I mit Akut
+1467     Groﬂbuchstabe I mit Zirkumflex
+23568    Groﬂbuchstabe I mit Umlautzeichen
+57       Groﬂbuchstabe I mit Gravis
+2568     Groﬂbuchstabe O mit Akut
+14567    Groﬂbuchstabe O mit Zirkumflex
+
+578      Groﬂbuchstabe O mit Gravis
+268      Groﬂbuchstabe U mit Akut
+1567     Groﬂbuchstabe U mit Zirkumflex
+35678    Groﬂbuchstabe U mit Gravis
+
+378      Zirkumflex
+2578     Tilde
+
+
+
+         Ringel
+         Cedille
+
+
+

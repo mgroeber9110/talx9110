@@ -1,0 +1,2336 @@
+@include <stdapp.goh>
+@include <foam.goh>
+#include <gstring.h>
+@include <internal/respondr.goh>
+@include <internal/resp/eci.goh>
+@include <internal/resp/indicato.goh>
+#include <initfile.h>
+
+/* header file object/gSystemC.goh is broken */
+extern ClassStruct GenSystemClass;
+
+#include <ansi/stdio.h>
+#include <ansi/stdlib.h>
+#include <ansi/string.h>
+
+@include "common.goh"
+#include "macroeng.h"
+
+#define SPEAK_TRANSLATION_FILE "speaklst"
+#define TALX_AUTO_EXEC NEC("extrapps\\TALX 9110") EC("extrapps\\EC TALX 9110")
+
+#define ECHO_OFF        0x00
+#define ECHO_WORDS      0x01
+#define ECHO_LETTERS    0x02
+
+#define SERIAL_LENGTH 11
+
+#define POLLING_INTERVAL        20  // In ticks
+#define POLLING_COUNT           45  // Polling duration (in intervals)
+#define POLLING_SLOW_LIMIT      10  // After 10 intervals polling slows down
+#define POLLING_SLOW_DIVIDER    3   // to 1/3 of its normal rate
+#define PROGRESS_BEEP_INTERVALS 3   // Intervals between two "progress" beeps
+
+#define VERSION "1.20"
+
+@class  SpeakProcessClass, GenProcessClass;
+  @message void MSG_SPEAK_PROC_TEST_SERIAL();
+  @message void MSG_SPEAK_PROC_ENABLE_AUTOSTART();
+  @message void MSG_SPEAK_PROC_DISABLE_AUTOSTART();
+  @message void MSG_SPEAK_PROC_EXIT();
+@endc
+
+
+/*
+ ***************************************************************************
+ *              UI Objects und tables
+ ***************************************************************************
+ */
+
+struct keyTable_struct {
+  word key;
+  ByteFlags flags;
+    #define SPKALWAYS 0x01
+    #define NAVKEY    0x02
+  char text[10];
+};
+
+struct resTable_struct {
+  optr obj;
+  char text[11];
+  byte type;
+    #define RES_VM 1        // obj refers to a Gen object with a VisMoniker
+    #define RES_CM 2        // obj refers to a Gen object wit a ComplexMoniker
+    #define RES_CH 3        // obj refers to a @chunk char []
+};
+
+@include "speak_ui.goh"
+
+/*
+ ***************************************************************************
+ *              Global variables
+ ***************************************************************************
+ */
+
+/* Loaded search/replace table */
+MemHandle repmh;
+
+void LoadTranslation(void);
+void UnloadTranslation(void);
+void TranslateResources(void);
+
+/* Event polling timer */
+TimerHandle timerHandle;
+word timerID;
+word count, G_progressCount;
+int timerEventType;
+word lastKey;
+Boolean speakContinue;
+dword lastSpeakTick;
+
+/* String for word-by-word speaking */
+byte keystr[128];
+word speakKeystr;
+byte backspChar;
+Boolean keyboardTraining;
+Boolean G_longSpell, G_capsSpell, G_punctSpell;
+
+/* Serial number handling */
+TCHAR IMEI[17];
+Boolean notDemo;
+Boolean IMEIvalidated;
+
+/* Current call type (one of INCT_INDICATOR_CALL_TYPE_...) */
+word G_indicatorCallType;
+
+ClassStruct *olbuttonclass;
+
+/* Braille-related */
+SynthType G_output, G_alternativeOutput;
+Boolean G_brailleMode;
+word G_brailleLine;
+  #define BRL_TITLE       1
+ 
+  #define BRL_FOCUS       2
+  #define BRL_TEXT        3
+  #define BRL_TREE        4
+
+  #define BRL_PSEUDOCUR   5
+
+  #define BRL_KEYS        6
+  #define BRL_APPKEYS     7
+  #define BRL_MIN         BRL_TITLE
+  #define BRL_MAX         BRL_APPKEYS
+word G_brailleOffset, G_brTextStart;
+Boolean G_brailleMore;
+Boolean G_pseudoCursorMode;
+optr G_brRoutingMarkObj;
+
+/*
+ ***************************************************************************
+ *              Code for SpeakProcessClass
+ ***************************************************************************
+ */
+
+@classdecl SpeakProcessClass;
+
+void ReplaceCMOptr(optr obj, optr text)
+{
+    ReplaceComplexMoniker rcm = {
+      0,0,0,
+      NULL,
+      NULL,
+      CMST_OPTR,
+      CMST_KEEP,
+      0, TRUE,
+    };
+    ReplaceComplexMonikerChunkHandles rcmch;
+
+    /* Update title of object by optr */
+    rcm.RCM_topTextSource = (dword)text;
+    @call obj::MSG_COMPLEX_MONIKER_REPLACE_MONIKER(&rcmch, &rcm);
+}
+
+void ReplaceCMText(optr obj, char *text)
+{
+    ReplaceComplexMoniker rcm = {
+      0,0,0,
+      NULL,
+      NULL,
+      CMST_FPTR,
+      CMST_KEEP,
+      0, TRUE,
+    };
+    ReplaceComplexMonikerChunkHandles rcmch;
+
+    /* Update title of object by text */
+    rcm.RCM_topTextSource = (dword)text;
+    @call obj::MSG_COMPLEX_MONIKER_REPLACE_MONIKER(&rcmch, &rcm);
+}
+
+/* Send a simulated keystroke to the input manager */
+void SynthesizeKey(byte cs, byte key, byte shift)
+{
+    const char scanTab[] = "..1234567890..."
+                           ".qwertyuiop..."
+                           ".asdfghjkl...."
+                           ".yxcvbnm";
+
+    optr im = ConstructOptr(MacroGetInputProcess(), 0);
+
+    word codeArg = (((word)cs)<<8) | key;
+    word shArg = ((word)shift)<<8; 
+    word scanArg = 0;
+    char *p;
+
+    /* Translate letters according to scan code table (for Ctrl codes) */
+    if(cs==CS_BSW)
+    {
+      p = strchr(scanTab, tolower(key));
+      if(p)
+        scanArg = (p-scanTab)<<8;
+    }
+    else if(cs==CS_CONTROL)
+    {
+      if(key==VC_LEFT || key==VC_HOME) scanArg = 0x4b00;
+      if(key==VC_RIGHT || key==VC_END) scanArg = 0x4d00;
+      if(key==VC_UP) scanArg = 0x4800;
+      if(key==VC_DOWN) scanArg = 0x5000;
+    }
+
+    /* Send key to input manager to simulate typing */
+    @send im::MSG_META_KBD_CHAR(codeArg, shArg | CF_FIRST_PRESS, scanArg);
+    @send im::MSG_META_KBD_CHAR(codeArg, shArg | CF_RELEASE, scanArg);
+}
+
+void TestAutostart(void)
+{
+    MemHandle mh = NullHandle;
+    word size;
+    char *p;
+    Boolean autostart = FALSE;
+
+    // Find out if our name is already in the autostart sequence    
+    if(!InitFileReadStringBlock("ui", "execOnStartup", &mh, IFRF_FIRST_ONLY, &size))
+    {
+      p = MemLock(mh);
+      if(strstr(p, TALX_AUTO_EXEC))
+        autostart = TRUE;
+      MemFree(mh);
+    }
+
+    /* Set triggers to allow changing of current autostart status */
+    if(autostart)
+    {
+      @send EnableAutostartTrigger::MSG_GEN_SET_NOT_USABLE(VUM_NOW);
+      @send DisableAutostartTrigger::MSG_GEN_SET_USABLE(VUM_NOW);
+    }
+    else
+    {
+      @send EnableAutostartTrigger::MSG_GEN_SET_USABLE(VUM_NOW);
+      @send DisableAutostartTrigger::MSG_GEN_SET_NOT_USABLE(VUM_NOW);
+    }
+}
+
+Boolean testSerial(char *serial)
+{
+    int len,i;
+    struct {
+      unsigned long secret1;
+      char imei[17];
+      unsigned long secret2;
+    } compSerial;
+    
+    union {
+      unsigned short words[2];
+      unsigned long longint;
+    } serialNumber;
+
+    char num[6];
+
+#   include <serial.inc>
+
+    /* Get previously determined IMEI */
+    strcpy(compSerial.imei, IMEI);
+    
+    compSerial.secret1 = secret[0];
+
+    /* Pad out IMEI buffer with zeroes */
+    len = strlen(compSerial.imei);
+    while(len<sizeof(compSerial.imei))
+      compSerial.imei[len++] = 0;
+    
+    /* Parse components of serial number */
+    for(i=0; i<2 && *serial; i++)
+    {
+      /* get up to 5 digits of one part */
+      for(len=0; isdigit(serial[len]) && len<5; len++)
+        num[len] = serial[len];
+      
+      /* convert number */
+      num[len] = 0;
+      serialNumber.words[i] = atoi(num);
+
+      /* skip over non-digits */
+      for(; serial[len] && !isdigit(serial[len]); len++)
+        ;
+      
+      serial += len;                    // advance to next number
+    }
+
+    compSerial.secret2 = secret[1];
+
+    return (i==2 && 
+      calc_crc(&compSerial, sizeof(compSerial))==serialNumber.longint);
+}
+
+void ActivateDemo(void)
+{
+    Boolean autostart = TRUE;
+
+    notDemo = TRUE;
+    ReplaceCMOptr(@MainBox, @TALXFull);
+    @send SerialDialog::MSG_GEN_INTERACTION_ACTIVATE_COMMAND(IC_DISMISS);
+
+    /* Enable autostart unless manually overridden */
+    InitFileReadBoolean("TALX", "autostart", &autostart);
+    if(autostart)
+      @send process::MSG_SPEAK_PROC_ENABLE_AUTOSTART();
+}
+
+void DeactivateDemo(void)
+{
+    char title[80];
+    ReplaceComplexMoniker rcm = {
+      0,0,0,
+      NULL,
+      NULL,
+      CMST_FPTR,
+      CMST_KEEP,
+      0, TRUE,
+    };
+    ReplaceComplexMonikerChunkHandles rcmch;
+
+    notDemo = FALSE;
+
+    /* Create localizable string with IMEI */
+    MemLock(OptrToHandle(@SerialTitle));
+    sprintf(title, LMemDeref(@SerialTitle), IMEI);
+    MemUnlock(OptrToHandle(@SerialTitle));
+
+    /* Update title of dialog box */
+    rcm.RCM_topTextSource = (dword)title;
+    @call SerialBox::MSG_COMPLEX_MONIKER_REPLACE_MONIKER(&rcmch, &rcm);
+
+    /* Update title of window to read "demo" until proven wrong */
+    ReplaceCMOptr(@MainBox, @TALXDemo);
+    
+    @send SerialDialog::MSG_GEN_INTERACTION_INITIATE();
+}
+
+void ValidateIMEI(void)
+{
+    word read;
+    char serialNumber[SERIAL_LENGTH+1];
+
+    /* Do not try to get IMEI for 90 seconds after rebooting the phone,
+       to avoid getting into conflicts during startup */
+    if(TimerGetCount() < 90*60 || IMEIvalidated)
+      return;
+
+    /* Get IMEI from phone - if no IMEI is available, the user
+       is lucky, and no check is performed (for now) */
+    EciGetImei((byte *)IMEI);
+    if(!IMEI[0])
+      return;                           /* Wait if still unavailable */
+
+    *serialNumber = 0;
+    InitFileReadStringBuffer("TALX", "serial", serialNumber,
+      sizeof(serialNumber), &read);
+
+    /* If serial number is accepted, make sure the UI reflects this */
+    if(testSerial(serialNumber))
+      ActivateDemo();
+    else
+      DeactivateDemo();
+    
+    /* Only ask once */
+    IMEIvalidated = TRUE;
+}
+
+@method SpeakProcessClass, MSG_META_NOTIFY
+{
+    if(notificationType == GWNT_RESPONDER_NOTIFICATION &&
+       manufID == MANUFACTURER_ID_GEOWORKS)
+    {
+      switch(data)
+      {
+        case RNT_LID_OPEN:
+          @send SpeakApp::MSG_MAPP_READ_WINDOW(0);
+          break;
+        case RNT_LID_CLOSED:
+          /* Prevent further speaking in "automatic" mode */
+          if(speakContinue)
+          {
+            G_pseudoCursorPos = G_oldPseudoCursorPos;
+            speakContinue = FALSE;
+          }
+          SynthStop(TRUE);
+          /* See if someone fiddled with the IMEI */
+          ValidateIMEI();
+          break;
+      }
+    }
+    else if(notificationType == GWNT_INDICATOR_SET_ACTIVE_CALL &&
+            manufID == MANUFACTURER_ID_GEOWORKS)
+    {
+      /* Remember current call type */
+      G_indicatorCallType = (word)data;
+    }
+    
+    @callsuper();
+}
+
+#pragma codeseg INIT_TEXT
+
+@method SpeakProcessClass, MSG_GEN_PROCESS_OPEN_APPLICATION
+{
+    optr myThread = ConstructOptr(GeodeGetProcessHandle(), NullChunk);
+    GeodeHandle rudy;
+
+    timerHandle = 0;
+    *keystr = 0;
+    backspChar = 0;
+    speakKeystr = 0;
+    notDemo = TRUE;
+    keyboardTraining = FALSE;
+    IMEIvalidated = FALSE;
+    speakContinue = FALSE;
+    *IMEI = 0;
+    lastSpeakTick = 0;
+    timerEventType = TET_NAV_KEY;
+    G_indicatorCallType = INCT_INDICATOR_CALL_TYPE_NONE;
+    G_recordingActive = FALSE;
+    G_recordingIndex = 0;
+    count = G_progressCount = 0;
+
+    /* Braille */
+    G_output = SPEECH_INTERNAL;
+    G_alternativeOutput = SPEECH_OFF;
+    G_brailleMode = FALSE;
+    G_brailleLine = BRL_MIN;
+    G_brailleWidth = 0;
+    G_brailleOffset = 0;
+    G_brailleMore  = FALSE;
+    G_pseudoCursorMode = FALSE;
+    G_brRoutingMarkObj = NullOptr;
+       
+    /* Load string translations and update text in resources accordingly */
+    LoadTranslation();
+    TranslateResources();
+
+    @callsuper();
+
+    /* Read alternative output from INI file */
+    InitFileReadInteger("TALX", "alternativeOutput", &G_alternativeOutput);
+
+    G_capsSpell = @call SpellCaps::MSG_GEN_ITEM_GROUP_GET_SELECTION();
+    G_longSpell = @call SpellLong::MSG_GEN_ITEM_GROUP_GET_SELECTION();
+    G_punctSpell = @call SpellPunct::MSG_GEN_ITEM_GROUP_GET_SELECTION();
+
+    if(@call Language::MSG_GEN_ITEM_GROUP_GET_SELECTION()!=LANG_NONE)
+    {
+      @call TextLanguageGroup::MSG_GEN_SET_ENABLED(VUM_DELAYED_VIA_APP_QUEUE);
+    }
+        
+    gen_crc_table();
+    ValidateIMEI();
+    
+    TestAutostart();                    // ensure autostart UI is consistent
+
+    GCNListAdd(myThread, MANUFACTURER_ID_GEOWORKS, GCNSLT_RESPONDER_NOTIFICATIONS);
+    GCNListAdd(myThread, MANUFACTURER_ID_GEOWORKS, GCNSLT_NOTIFY_INDICATOR_EVENT);
+    
+    MacroInit();
+    MacroSetHotkeys(hotkeys, @SpeakApp, MSG_MAPP_OTHER_KEY);
+
+    /* Unfortunately, the "rudy" SpecUI library doesn't export OLButtonClass,
+       which is private to the specific UI. Anyway, as we have to be able to
+       detect objects of this class reliably, we reconstruct the class pointer
+       based on another export in the same segment and the assumption that
+       the class structure starts at offset 0 in that segment. */
+
+    rudy = GeodeFind("rudy    ",8,0,0);
+    olbuttonclass = (ClassStruct *)ConstructOptr(
+      SegmentOf(ProcGetLibraryEntry(rudy,30)), 0x0000);
+}
+
+@method SpeakProcessClass, MSG_SPEAK_PROC_ENABLE_AUTOSTART
+{
+    /* Put us into autostart sequence */
+    UserAddAutoExec(TALX_AUTO_EXEC);
+
+    /* Remember this decision */
+    InitFileWriteBoolean("TALX", "autostart", TRUE);
+    InitFileCommit();
+
+    TestAutostart();                    // update UI consistently
+}
+
+@method SpeakProcessClass, MSG_SPEAK_PROC_DISABLE_AUTOSTART
+{  
+    if(FoamDisplayQuestion(@ConfirmDisableAuto)==IC_YES)
+    {                                   // ask user for confirmation
+      /* Remove us from autostart sequence */
+      UserRemoveAutoExec(TALX_AUTO_EXEC);
+
+      /* Remember this decision */
+      InitFileWriteBoolean("TALX", "autostart", FALSE);
+      InitFileCommit();
+
+      TestAutostart();                  // update UI consistently
+    }
+}
+
+@method SpeakProcessClass, MSG_SPEAK_PROC_EXIT
+{  
+    if(FoamDisplayQuestion(@ConfirmExit)==IC_YES)
+    {                                   // ask user for confirmation
+      @send SpeakApp::MSG_META_QUIT();
+    }
+}
+
+@method SpeakProcessClass, MSG_SPEAK_PROC_TEST_SERIAL
+{
+    char serialNumber[SERIAL_LENGTH+1];
+
+    @call SerialTextField::MSG_VIS_TEXT_GET_ALL_PTR(serialNumber);
+    if(testSerial(serialNumber))
+    {
+      InitFileWriteString("TALX", "serial", serialNumber);
+      ActivateDemo();
+      InitFileCommit();
+    }
+    else
+      FoamDisplayNote(@InvalidSerial);
+}
+
+@method SpeakProcessClass, MSG_GEN_PROCESS_CLOSE_APPLICATION
+{
+    optr myThread = ConstructOptr(GeodeGetProcessHandle(), NullChunk);
+
+    if(timerHandle)
+    {
+      TimerStop(timerHandle, timerID);
+      timerHandle = 0;
+    }
+
+    UnloadTranslation();
+
+    GCNListRemove(myThread, MANUFACTURER_ID_GEOWORKS, GCNSLT_RESPONDER_NOTIFICATIONS);
+
+    MacroDeinit();
+    
+    return @callsuper();
+}
+
+/*
+ ***************************************************************************
+ *              Checksums
+ ***************************************************************************
+ */
+
+unsigned long crc_table[256];
+
+void gen_crc_table(void)
+{
+    unsigned long crc, poly;
+    int i, j;
+
+    /* build the crc table */
+    poly = 0xEDB88320L;
+    for (i = 0; i < 256; i++)
+        {
+        crc = i;
+        for (j = 8; j > 0; j--)
+            {
+            if (crc & 1)
+                crc = (crc >> 1) ^ poly;
+            else
+                crc >>= 1;
+            }
+        crc_table[i] = crc;
+        }
+}
+
+#pragma codeseg
+
+unsigned long calc_crc(byte *buf, int n)
+{
+    int i;
+    unsigned long crc = 0xFFFFFFFF;
+    
+    for(i=0; i<n; i++)
+      crc = ((crc>>8) & 0x00FFFFFF) ^ crc_table[ (crc^buf[i]) & 0xFF ];
+
+    return crc^0xFFFFFFFF;
+}
+
+/*
+ ***************************************************************************
+ *              Search/replace pre-processing of sentences
+ ***************************************************************************
+ */
+
+#pragma codeseg INIT_TEXT
+
+#define xdigit2int(c) \
+  ((toupper((byte)(c))-'0') - (isalpha((byte)(c))?('A'-'0'-10):0))
+
+void LoadTranslation(void)
+{
+    FILE *f;
+    char line[256],*p,*s1,*s2;
+    char *repbuf;
+    word len,buflen;
+
+    FoamSetDocumentDir(FDD_TONES);
+    f = fopen(SPEAK_TRANSLATION_FILE, "r");
+    if(f)
+    {
+      len = 0;
+      buflen = 256;
+
+      repmh = MemAlloc(buflen, HF_DYNAMIC, 0);
+      repbuf = MemLock(repmh);
+
+      while(!feof(f) && fgets(line, sizeof(line), f))
+      {
+        /* Assume that input file uses ANSI resp. ISO Latin-1 charset */
+        LocalCodePageToGeos(line, strlen(line), CODE_PAGE_LATIN_1, '?');
+
+        p = line;
+        while(*p==' ' || *p=='\t' || *p=='\r' || *p=='\n')
+          p++;                          // skip over leading spaces
+        if(*p)
+        {
+          /* Extract first string */
+          s1 = p;
+          while(*p && *p!=' ' && *p!='\t' && *p!='\r' && *p!='\n')
+            p++;                        // get first string
+          if(*p)                        // delimit first string
+            *(p++) = 0;
+          while(*p==' ' || *p=='\t' || *p=='\r' || *p=='\n')
+            p++;                        // skip over delimiting whitespace
+          s2 = p;
+
+          /* Remove trailing whitespaces from second string */
+          p = s2+strlen(s2);
+          while(p>s2 && (*(p-1)=='\r' || *(p-1)=='\n' || *(p-1)==' ' || *(p-1)=='\t'))
+            p--;
+          *p = 0;                       // delimit second string
+
+          /* Fix {...} placeholders to internal representation to allow
+             for safer "inband signalling". */
+          if(s1[0]=='{' && s1[strlen(s1)-1]=='}')
+          {
+            s1[0] = '\x01';
+            s1[strlen(s1)-1] = '\x01';
+          }
+
+          /* Fix Geos encoding escape (only for single char patterns) */
+          if(s1[0]=='\\' && s1[1]=='x' && 
+             isxdigit((byte)s1[2]) && isxdigit((byte)s1[3]))
+          {
+            s1[0] = (xdigit2int(s1[2])<<4) + xdigit2int(s1[3]);
+            s1[1] = 0;
+          }
+
+          while(len+strlen(s1)+strlen(s2)+3>buflen)
+          {
+            buflen += 128;
+            MemReAlloc(repmh, buflen, 0);
+            repbuf = MemDeref(repmh);
+          }
+         
+          strcpy(repbuf+len, s1);
+          len += strlen(s1)+1;
+          strcpy(repbuf+len, s2);
+          len += strlen(s2)+1;
+        }
+      }
+
+      repbuf[len] = 0;                  // Terminate with an empty string
+
+      MemUnlock(repmh);
+      fclose(f);
+    }
+    else
+      repmh = NullHandle;
+}
+
+void UnloadTranslation(void)
+{
+    if(repmh)                           // Release translation table
+    {
+      MemFree(repmh);
+      repmh = NullHandle;
+    }
+}
+
+#pragma codeseg SPEAK_TRANS_TEXT
+
+void TranslateString(char *str, Boolean singleChar)
+{
+    char buf[MAX_SPEAK_BUF],*repbuf,*s,*d,*t;
+    int i;
+    Boolean hit;
+    word minlevel;
+
+    if(!repmh) return;                  // Bail out if no translation loaded
+    
+    d = buf;
+    repbuf = MemLock(repmh);
+    for(s = str; *s; s++)
+    {
+      t = repbuf;
+      while(*t)                         // Check all translations
+      {
+        hit = FALSE;
+        for(i=0; t[i] && t[i]==s[i]; i++)
+          ;                             // See if translation applies
+        if(t[i]==0 && (singleChar || i>1))
+        {                               // yes:
+          s += (i-1);                   // Remove from source
+          t += i+1;                     // Go to replacement
+          
+          /*
+           * Check \1,\2,\3 or \#1, \#2, \#3 prefixes to indicate
+           * minimum punctuation level required for doing a
+           * conditional replacement. The '#' chracter indicates
+           * that the replacement is to be done in any case if none of
+           * the adjacent characters is a letter or if the previous or
+           * next character is a duplication of this one.
+           */
+          if(*t=='\\')
+          {
+            t++;                        // Skip over '\'
+            if(*t==C_NUMBER_SIGN)
+            {
+              t++;                      // Skip over '#'
+              if((!isalpha((byte)s[1]) && (s==str || !isalpha((byte)s[-1])))
+                 || s[0]==s[1] 
+                 || (s>str && s[0]==s[-1]))
+                minlevel = 0;           // Yes: always do replacement
+              else
+                minlevel = (*t-'0');    // No: replacement depends on level;
+            }
+            else
+              minlevel = (*t-'0');
+            t++;                        // Skip over level digit
+            if(*t==' ') t++;            // Skip blank before replacement
+          }
+          else
+            minlevel = 0;               // Uncoditional: always do replacement
+
+          if(str[1]==0)                 // Replace always in 1-character string
+            minlevel = 0;               // (key echo)
+
+          if(G_punctSpell >= minlevel)  // Only if replacement is to be made
+          {
+            if(d>buf && isword((byte)d[-1]))
+              *(d++) = ' ';             // Leading space if needed
+            while(*t)
+              *(d++) = *(t++);
+            if(d>buf && isword((byte)d[-1]))
+              *(d++) = ' ';             // Trailing space if needed
+            hit = TRUE;
+          }
+          break;
+        }
+
+        while(*t) t++;                  // Skip over rest of translation
+        t++;
+        while(*t) t++;                  // Skip over replacement
+        t++;
+      }
+      if(!hit)
+      {
+        if(*s=='\x01')                  // Remove unknown placeholders
+        {
+          if(s[1]) s++;
+          while(s[1] && *s!='\x01')
+            s++;
+        }
+        else
+          *(d++) = *s;
+      }
+    }
+    MemUnlock(repmh);
+
+    *(d++) = 0;
+    strcpy(str, buf);                   // Copy back result
+}
+
+void TranslateWord(byte *buf)
+{
+    int i,l;
+    char *ins = NULL;
+
+    if(!*buf) return;                   // Ignore empty buffers
+
+    if(G_capsSpell && talx_isupper(buf[0]))
+    {
+      ins = PL("SpUC");
+      if(buf[1])
+      {
+        for(i=1; talx_isupper(buf[i]); i++)
+          ;
+        if(!isword(buf[i]))
+          ins = PL("SpCA");
+      }
+    }
+
+    if(ins)
+    {
+      l = strlen(ins);
+      for(i=strlen((char *)buf); i>=0; i--)
+        buf[i+l] = buf[i];
+      for(i=0; i<l; i++)
+        buf[i] = ins[i];
+    }
+}
+
+void TranslateLetter(byte *buf, Boolean doUpper)
+{
+    byte ch = *buf;                     // Work on first letter of buffer
+    byte *p;
+
+    p = buf;
+    if(ch==' ')                         // Special handling for space
+      strcpy((char *)p, PL("SpSpace"));   // (avoid replacement with blank)
+    else if(isalpha(ch))
+    {      
+      if(doUpper && G_capsSpell && talx_isupper(buf[0]))
+      {
+        strcpy((char *)buf, PL("SpUC"));
+        p = buf+strlen((char *)buf);
+      }
+      if(G_longSpell)                   // Spell based on table
+        sprintf((char *)p, PL("Sp%c"), toupper(ch));
+      else
+        *p = 0;                         // Fall through to direct replacement
+    }
+    else if(ch)
+    {
+      sprintf((char *)p, PL("Sp%c"), ch); // Symbol: try spelling replacement   
+    }
+
+    if(*p) 
+      TranslateString((char *)p, FALSE);// Check translation table
+    if(!*p)                             // No "spelling" replacement found
+    {
+      p[0] = ch;                        // Pass back character regularly
+      p[1] = 0;                         // Leave handling to speech layer
+      TranslateString((char *)p, FALSE);
+    }
+}
+
+void SpellWord(byte *str)
+{ 
+    byte buf[MAX_SPEAK_BUF], *p, lc = 0, nc;
+    int j;
+
+    j = 0;
+    p = str;
+    while(*p && j<MAX_SPEAK_BUF-SPEAK_BUF_GUARD)
+    {
+      if(j)
+        buf[j++] = ' ';
+      nc = *p;                          // get this character
+      if(nc==' ' && (str[1]!=0))        // pause for spaces
+      {
+        if(lc!=' ')                     // first space in a row causes a pause
+          strcpy((char *)buf+j, PL("."));
+        else
+          buf[j] = 0;
+        p++;
+      }
+      else if(nc=='\x01')               // placeholder?
+      {
+        buf[j++] = *(p++);              // copy leading delimiter
+        while(*p && *p!='\x01')         // copy placeholder (don't spell it...)
+          buf[j++] = *(p++);
+        if(*p)                          // copy trailing delimiter
+          buf[j++] = *(p++);
+        buf[j] = 0;
+      }
+      else
+      {
+        buf[j] = *(p++);
+        TranslateLetter(buf+j, (str[1]==0));
+      }
+      j += strlen((char *)buf+j);
+      lc = nc;                          // remember character for next round
+    }
+    
+    buf[j] = 0;
+    strcpy((char *)str, (char *)buf);
+}
+
+#pragma codeseg INIT_TEXT
+
+void TranslateResources(void)
+{
+    struct resTable_struct *resTable;
+    char buf[512];
+    int i,j;
+    optr obj;
+
+    MemLock(OptrToHandle(@resTableChunk));
+    resTable = LMemDeref(@resTableChunk);
+    for(i=0; resTable[i].obj; i++)
+    {
+      strcpy(buf, resTable[i].text);    // Get resource template
+      TranslateString(buf, FALSE);      // Translate according to table
+      for(j=0; buf[j]; j++)             // Insert newlines where requested
+        if(buf[j]=='\\')
+          buf[j] = '\r';
+      obj = resTable[i].obj;
+
+      switch(resTable[i].type)
+      {
+        case RES_VM:                    // VisMoniker
+          @call obj::MSG_GEN_REPLACE_VIS_MONIKER_TEXT(buf, VUM_DELAYED_VIA_APP_QUEUE);
+          break;
+        case RES_CM:                    // ComplexMoniker
+          ReplaceCMText(obj, buf);
+          break;
+        case RES_CH:                    // ChunkHandle
+          MemLock(OptrToHandle(obj));
+          if(!LMemReAlloc(obj, strlen(buf)+1))
+            strcpy(LMemDeref(obj), buf);
+          MemUnlock(OptrToHandle(obj));
+          break;
+      }
+    }
+    MemUnlock(OptrToHandle(@resTableChunk));
+
+    /* Translate template for "About" text - handled specially because it
+       requires a more extended set of hard-coded strings */
+    strcpy(buf, AboutTextTemplate);
+    TranslateString(buf, FALSE);
+
+    /* Enter new "About" text */
+    MemLock(OptrToHandle(@AboutTextChunk));
+    if(!LMemReAlloc(@AboutTextChunk, strlen(buf)+1))
+      strcpy(LMemDeref(@AboutTextChunk), buf);
+    MemUnlock(OptrToHandle(@AboutTextChunk));    
+}
+
+/*
+ ***************************************************************************
+ *              Logic speech support
+ ***************************************************************************
+ */
+
+#pragma codeseg 
+
+/* Compute length of string, taking into account replacements */
+int LengthString(const char *message)
+{
+    char buf[MAX_SPEAK_BUF];
+
+    strcpy(buf, message);
+    TranslateString(buf, !G_brailleMode);
+    return strlen(buf);
+}
+
+void SpeakSentence(byte *buf, optr app)
+{
+    SynthStop(TRUE);
+
+    if(app!=@SpeakApp)
+    {
+      if(app && !notDemo) return;       // Don't output data if in "Demo" mode
+    }
+        
+    SynthSwitch(G_output);
+    SynthSpeak(buf);
+}
+
+void addObjectName(char *buf, char *pre, char *labelText, char *sep)
+{
+    if(*labelText)
+    {
+      strcat(buf, pre);
+      strcat(buf, labelText);
+      strcat(buf, sep);
+    }
+}
+
+void printLabelsBr(ObjectRefs *oref, ObjectRefTexts *oreftexts, char *buf, 
+                   WordFlags sayWhat, word *cursor, word *cursor2)
+{
+    int i,j;
+    word width = G_brailleWidth? G_brailleWidth : 40;
+    word len;
+    
+    G_brTextStart = CURSOR_POS_NONE;    // start of text object on line
+    
+    /* No cursor position identified yet */
+    *cursor = *cursor2 = CURSOR_POS_NONE;
+
+    /* Set focus based on what we would normally say */
+    if(sayWhat & SAY_WHAT_TITLE)
+      G_brailleLine = BRL_TITLE;
+    else if(sayWhat & SAY_WHAT_FOCUS)
+    {
+      /* Reposition on text line if the focus label belongs there */
+      if(G_lastObj.focusParent && !G_lastObj.focusLabel && G_lastObj.textObj)
+        G_brailleLine = BRL_TEXT;
+      else
+        G_brailleLine = BRL_FOCUS;
+    }
+    else if(sayWhat & (SAY_WHAT_TEXT | SAY_WHAT_TEXTPART))
+      G_brailleLine = (G_brailleLine==BRL_PSEUDOCUR)? G_brailleLine : BRL_TEXT;
+    else if(sayWhat & (SAY_WHAT_TREE))
+      G_brailleLine = BRL_TREE;
+    
+    /* Create current line */
+    switch(G_brailleLine)
+    {
+      case BRL_TITLE:
+        sprintf(buf, PL("BrlT1") " %s " PL("BrlT2"), oreftexts->dialogLabelText);
+        break;
+      case BRL_FOCUS:
+        /* Use appropriate prefix depending on selection state */
+        strcpy(buf, 
+          ((oref->flags & (ORF_MENU_FOCUS | ORF_MENU_EXCL))!=ORF_MENU_FOCUS)?
+            PL("BrlF"):
+          (oref->flags & ORF_MENU_SELECTED)?
+            PL("BrlFSel"):
+            PL("BrlFUns"));
+        strcat(buf,oreftexts->focusParentText);
+        if(LengthString(oreftexts->focusParentText) && 
+           LengthString(oreftexts->focusLabelText))
+          strcat(buf, ":");
+        strcat(buf,oreftexts->focusLabelText);
+        break;
+      case BRL_TEXT:
+      case BRL_PSEUDOCUR:
+        if(G_brailleLine==BRL_PSEUDOCUR)
+        {
+          strcpy(buf, PL("BrlV"));
+        }
+        else if(oref->focusParent && !(oref->focusLabel))
+        {
+          sprintf(buf, "%s ", oreftexts->focusParentText);
+        }
+        else
+        {
+          strcpy(buf, PL("BrlT"));
+        }
+        TranslateString(buf, FALSE);    // translate before adding text
+        G_brTextStart = strlen(buf);    // start of actual text field
+        strcat(buf, oreftexts->textObjText);
+        if(oreftexts->textObjCursorPos != CURSOR_POS_NONE)
+          *cursor = G_brTextStart + oreftexts->textObjCursorPos;
+        if(oreftexts->textObjCursorPos2 != CURSOR_POS_NONE)
+          *cursor2 = G_brTextStart + oreftexts->textObjCursorPos2;
+        break;
+      case BRL_TREE:
+        strcpy(buf, PL("BrlO"));
+        strcat(buf, oreftexts->treeText);
+        break;
+      case BRL_KEYS:
+        *buf = 0;
+        for(i=0; i<4; i++)
+        {
+          if(oreftexts->buttonLabelsText[i][0])
+          {
+            if(*buf) 
+              strcat(buf, ",");
+            sprintf(buf+strlen(buf), "%d=%s", 
+              i+1, 
+              oreftexts->buttonLabelsText[i]);
+          }
+        }
+        if(oref->flags & ORF_HAS_MENU)
+        {
+          if(*buf) 
+            strcat(buf, ",");
+          strcat(buf, PL("BrlMenu"));
+        }
+        break;
+      case BRL_APPKEYS:
+        strcpy(buf, PL("BrlKeys"));
+        break;
+    }
+
+    /* Replace graphics etc. (not for text lines) */
+    if(G_brTextStart==CURSOR_POS_NONE)
+      TranslateString(buf, FALSE);
+
+    /* Eliminate duplicate spaces (artifacts of string assembly) */
+    for(i=0,j=0; buf[j]; j++)
+    {
+      if(j>=G_brTextStart || buf[j] != ' ' || j==0 || buf[j-1] !=' ')
+      {
+        buf[i++] = buf[j];            // copy data
+      }
+    }
+    buf[i] = 0;
+
+    /* Possibly move window to show cursor */
+    if(timerEventType==TET_SAY_LINE && *cursor != CURSOR_POS_NONE)
+    {
+      /* Move window to left if cursor out of view */
+      while(G_brailleOffset && *cursor < G_brailleOffset)
+        G_brailleOffset -= (G_brailleOffset<width)? G_brailleOffset: width;
+      
+      /* Move window to right if cursor out of view */
+      while(*cursor >= G_brailleOffset+width)
+        G_brailleOffset += width;
+    }
+
+    /* Go back to start of line if moved too far */
+    len = strlen(buf);
+    if((int)(len-G_brailleOffset)<=0 && G_brailleOffset != *cursor)
+      G_brailleOffset = 0;
+
+    /* Move "window" to focus on selected area */
+    memmove(buf, buf+G_brailleOffset, len-G_brailleOffset+1);
+
+    /* Didn't find end of line yet? */
+    if(len-G_brailleOffset > width)
+      G_brailleMore = TRUE;             // more to the right
+    else
+      G_brailleMore  = FALSE;           // end of line
+
+    /* Adjust cursor position for display offset */
+    if(*cursor != CURSOR_POS_NONE)
+    {
+      *cursor -= G_brailleOffset;
+      *cursor2 -= G_brailleOffset;
+
+      /* Selection: clip start to visible range to avoid wrap problems */
+      if(*cursor != *cursor2)
+      {
+        if((int)*cursor<0)
+        {
+          *cursor = 0;
+          if(*cursor==*cursor2)         // avoid collapse into cursor
+            *cursor = *cursor2 = CURSOR_POS_NONE;
+        }
+      }
+    }
+}
+
+void printLabelsSp(ObjectRefs *oref, ObjectRefTexts *oreftexts, char *buf, WordFlags sayWhat)
+{
+    int i;
+    char str[40];
+  
+    *buf = 0;
+    
+    if(sayWhat & SAY_WHAT_TITLE)
+      addObjectName(buf, PL("WinPre"), oreftexts->dialogLabelText, PL("WinPost")PL("."));
+
+    if(sayWhat & SAY_WHAT_WILL_CONTINUE)
+    {
+      for(i=0; i<4; i++)
+        if(sayWhat & (SAY_WHAT_BUTTON1>>i))
+        {
+          sprintf(str, PL("Key") " %d ", i+1);
+          addObjectName(buf, str, oreftexts->buttonLabelsText[i], "");
+        }
+      if((sayWhat & SAY_WHAT_MENU) && (oref->flags & ORF_HAS_MENU))
+        strcat(buf,PL("HasMenu"));
+      strcat(buf, PL("."));
+    }
+
+    if(sayWhat & SAY_WHAT_FOCUS)
+    {
+      addObjectName(buf, "", oreftexts->focusParentText,
+        (oref->flags & ORF_CHOICE_FOCUS)?" ":" " PL(".") " ");
+
+      addObjectName(buf, 
+        (oref->flags & ORF_MENU_FOCUS)?
+          ((oref->flags & ORF_MENU_EXCL)?
+             PL("Sel") " " :
+           (oref->flags & ORF_MENU_SELECTED)? 
+             PL("SelSel") " ": 
+             PL("SelUnsel") " ") :
+        (oref->flags & ORF_CHOICE_FOCUS)?
+          PL("Prop") " " : "",
+        oreftexts->focusLabelText, " " PL(".") " ");
+    }
+    
+    if(sayWhat & (SAY_WHAT_TEXT | SAY_WHAT_TEXTPART))
+    {
+      Boolean altLang = @call TextLanguage::MSG_GEN_ITEM_GROUP_GET_SELECTION();
+
+      if(sayWhat & SAY_WHAT_TEXT)
+        strcat(buf, (oref->flags & ORF_TEXT_IS_ONE_LINE)?PL("Entry"):PL("Editor"));
+      if(altLang) strcat(buf, "\x0B");  // mark as "alternate language"
+      addObjectName(buf, "", oreftexts->textObjText, "");
+      if(altLang) strcat(buf, "\x0B");  // mark as "alternate language"
+      strcat(buf, PL("."));
+    }
+
+    if(sayWhat & SAY_WHAT_TREE)
+    {
+      addObjectName(buf, "", oreftexts->treeText, PL("."));
+    }
+
+    if(!(sayWhat & SAY_WHAT_WILL_CONTINUE))
+    {
+      for(i=0; i<4; i++)
+        if(sayWhat & (SAY_WHAT_BUTTON1>>i))
+        {
+          sprintf(str, PL("Key") " %d ", i+1);
+          addObjectName(buf, str, oreftexts->buttonLabelsText[i], "");
+        }
+      if((sayWhat & SAY_WHAT_MENU) && (oref->flags & ORF_HAS_MENU))
+        strcat(buf,PL("HasMenu"));
+    }
+
+    /* remove trailing pauses and spaces */
+    i = strlen(buf);
+    while(1)
+    {
+      if(i>1 && buf[i-1]==' ')
+      {
+        i--;
+      }
+      else if(i>=sizeof(PL(".")-1) && 
+        strncmp(buf+i-sizeof(PL("."))+1,PL("."),sizeof(PL(".")-1))==0)
+      {
+        i -= sizeof(PL("."))-1;
+      }
+      else
+        break;
+    }
+    buf[i] = 0 ;
+}
+
+Boolean SaySomething(optr base, Boolean focusRelative, TalkEventType tet)
+{
+    optr system, app, thread, uithread;
+    EventHandle evt;
+    char buf[MAX_SPEAK_BUF];
+    Boolean ret = FALSE;
+    
+    if(focusRelative)
+    {
+      /* Find GenSystem object */
+      evt = @record NULL::MSG_META_GET_OPTR();
+      system = @call {MSG_META_GET_OPTR}base::MSG_GEN_CALL_SYSTEM(evt);
+      if(!system) return FALSE;
+
+      app = system;
+      while(app && !@call app::MSG_META_IS_OBJECT_IN_CLASS(&GenApplicationClass))
+        if(!@call app::MSG_META_GET_FOCUS_EXCL(&app))
+          app = NULL;
+    }
+    else
+      app = base;
+
+    if(app)
+    {    
+      /* Get thread executing the focussed application and its UI */
+      thread = ConstructOptr(MemGetInfo(OptrToHandle(app),
+        MGIT_OWNER_OR_VM_FILE_HANDLE),0);
+      uithread = ConstructOptr(MemGetInfo(OptrToHandle(app),
+        MGIT_EXEC_THREAD),0);
+
+      /* Compile output string. For performance and synchronization reasons,
+         we do this on a thread of the focussed application */
+      
+      /* First find out if a progress dialog is running */
+      G_app = app;
+      G_eventType = tet;
+      @call uithread::MSG_PROCESS_CALL_ROUTINE(0,0,0,0,0,0,UIProgressTest);
+
+      /* If so, only look at UI thread in case the process thread is blocked */
+      @call ((G_sayWhat & SAY_WHAT_IS_PROGRESS)? uithread : thread)::
+        MSG_PROCESS_CALL_ROUTINE(0,0,0,0,0,0,CompileOutput);
+
+      /* Assemble it to a string */
+      *buf = 0;
+
+      if(G_brailleMode)
+      {
+        word cursor, cursor2;
+
+        printLabelsBr(&G_lastObj, &G_lastObjTexts, buf, G_sayWhat,
+          &cursor, &cursor2);
+        
+        /* Set cursor on braille display */
+        BrailleSetCursor(cursor, cursor2);
+      }
+      else
+      {
+        printLabelsSp(&G_lastObj, &G_lastObjTexts, buf, G_sayWhat);
+
+        if(*buf)
+        {
+          /* Special replacements for spelling alphabet and upper/lower case */
+          if(tet==TET_SAY_LETTER)
+          {
+            TranslateLetter((byte *)buf, TRUE);
+          }
+          else if(tet==TET_SAY_WORD)
+          {
+            TranslateWord((byte *)buf);
+          }
+          else if(tet==TET_SPELL_SELECTION || tet==TET_SPELL_WORD)
+          {
+            SpellWord((byte *)buf);
+          }
+
+          /* Timestamp the moment we started talking, so any previous keypresses
+             can be ignored even if they are still in the queue */
+          lastSpeakTick = TimerGetCount();
+        }
+
+        TranslateString(buf, TRUE);
+      }
+
+      /* Was any kind of change detected? */
+      if(G_sayWhat || *buf)
+      {
+        SpeakSentence((byte *)buf, app);
+        speakContinue = (G_sayWhat & SAY_WHAT_WILL_CONTINUE);
+        ret = TRUE;
+      }
+    }
+
+    return ret;
+}
+
+void SayKeystr(void)
+{
+    word echo;
+    char buf[MAX_SPEAK_BUF];
+    int compword,restword,j;
+
+#   define isword_nodigit(ch) ((isword(ch) && !isdigit(ch)))
+
+    if(backspChar)                      // first speak pending backspace char
+    {
+      if(backspChar=='\r')
+      {
+        strcpy(buf, PL("Para"));
+      }
+      else if(backspChar>=' ')
+      {
+        buf[0] = (char)backspChar;
+        buf[1] = 0;
+      }
+      /* Possibly do spelling alphabet and upper case */
+      TranslateLetter((byte *)buf, TRUE); 
+      SpeakSentence((byte *)buf, NullOptr);
+      backspChar = 0;                   // has been dealt with
+    }    
+    else if(*keystr)
+    {
+      Boolean altLang = @call TextLanguage::MSG_GEN_ITEM_GROUP_GET_SELECTION();      
+
+      echo = @call Echo::MSG_GEN_ITEM_GROUP_GET_SELECTION();
+
+      j = 0;                            // Nothing in output buffer yet
+      if(altLang) buf[j++] = '\x0B';    // Treat as text for language switching
+
+      if(echo & ECHO_WORDS)
+      {
+        /* Find complete word at the start of the queue */
+        compword = 0;
+        for(compword=0; isword_nodigit(keystr[compword]); compword++)
+          ;
+
+        /* Leave incomplete word at the end of the queue in buffer */
+        restword = strlen((char *)keystr);
+        while(restword>0 && isword_nodigit(keystr[restword-1]))
+          restword--;
+
+        if(compword>0 && compword<restword)
+        {
+          strncpy(buf+j, (char *)keystr, compword);
+          buf[j+compword] = 0;
+          TranslateWord((byte *)buf+j); // Possibly handle upper case
+          j += strlen(buf+j);
+        }
+      }
+      else
+      {
+        restword = strlen((char *)keystr);
+      }
+      
+      if(keystr[speakKeystr] &&
+         ((echo & ECHO_LETTERS) 
+          || ((echo & ECHO_WORDS) && !isword_nodigit(keystr[speakKeystr]))))
+      {
+        if(j)
+          buf[j++] = ' ';
+        if(keystr[speakKeystr]=='\x01')
+          while(keystr[speakKeystr])
+            buf[j++] = keystr[speakKeystr++];
+        else
+        {
+          buf[j] = keystr[speakKeystr++];
+          /* Possibly do spelling alphabet and upper case */
+          TranslateLetter((byte *)(buf+j), TRUE); 
+          j = strlen(buf);
+        }
+      }
+      if(altLang)                       // Treat as text for language switching
+      {
+        if(j>1)
+          buf[j++] = '\x0B';
+        else
+          j = 0;                        // Revert string to empty
+      }
+      buf[j] = 0;
+      
+      if(*buf && !(G_lastObj.flags & ORF_DONT_SPEAK_KEYS))
+      {
+        TranslateString(buf, TRUE);
+        SpeakSentence((byte *)buf, NullOptr);
+      }
+
+      /* Remove spoken words (0..restword-1) from queue */
+      for(j=0; keystr[restword+j]; j++)
+        keystr[j] = keystr[restword+j];
+      keystr[j] = 0;
+      speakKeystr -= restword;                 // adjust end pointer
+    }
+}
+
+void SayKey(const char *keyname)
+{
+    char buf[MAX_SPEAK_BUF];
+
+    strcpy(buf, keyname);
+    if(keyname[0] != '\x01')
+      TranslateLetter((byte *)buf, TRUE);
+    TranslateString(buf, !G_brailleMode);
+    SpeakSentence((byte *)buf, NullOptr);
+}
+
+void SayString(const char *message)
+{
+    char buf[MAX_SPEAK_BUF];
+
+    strcpy(buf, message);
+    TranslateString(buf, !G_brailleMode);
+    SpeakSentence((byte *)buf, NullOptr);
+}
+
+void SayOptr(optr message)
+{
+    char buf[MAX_SPEAK_BUF];
+
+    MemLock(OptrToHandle(message));
+    strcpy(buf, LMemDeref(message));
+    MemUnlock(OptrToHandle(message));
+    TranslateString(buf, !G_brailleMode);
+    SpeakSentence((byte *)buf, NullOptr);
+}
+
+/*
+ ***************************************************************************
+ *              Code for SpeakApplicationClass
+ ***************************************************************************
+ */
+
+@classdecl SpeakApplicationClass;
+
+/* Implemented in speech.goc: */
+@extern method SpeakApplicationClass, MSG_MAPP_SYNTH_SERIAL;
+@extern method SpeakApplicationClass, MSG_MAPP_SYNTH_TIMER_INT;
+@extern method SpeakApplicationClass, MSG_MAPP_SYNTH_TIMER_EXT;
+
+/* Implemented in braille.goc: */
+@extern method SpeakApplicationClass, MSG_MAPP_SYNTH_HTBRAILLE_SERIAL;
+@extern method SpeakApplicationClass, MSG_MAPP_SYNTH_ALBRAILLE_SERIAL;
+
+#pragma codeseg SPEAK_KEY_TEXT
+
+void KeyPressed(word key)
+{
+    /* Stopping not needed for Braille mode */
+    if(G_brailleMode) return;
+
+    /* Prevent further speaking in "automatic" mode */
+    if(speakContinue)
+    {
+      G_pseudoCursorPos = G_oldPseudoCursorPos;
+      speakContinue = FALSE;
+    }
+    
+    /* Stop things that can be handled asynchronously (unless keys should
+       be quiet, except for Ctrl, which always works) */
+    if(!(G_lastObj.flags & ORF_DONT_SPEAK_KEYS) ||
+       key == (MAKE_SHORTCUT( CS_CONTROL, VC_LCTRL ) | KS_CTRL))
+    {
+      SynthStop(FALSE);
+    }
+}
+ 
+@method SpeakApplicationClass, MSG_MAPP_OTHER_KEY
+{
+    int i;
+    int savedLastKey = lastKey;
+    char singleKeyBuf[2], *keyName = NULL;
+
+    /* Not needed in Braille mode */
+    if(!G_brailleMode)
+    {
+      /* Full synchronous stop */
+      if(!(G_lastObj.flags & ORF_DONT_SPEAK_KEYS) && timestamp>lastSpeakTick)
+        SynthStop(TRUE);
+    }
+    
+    /* This only works in "absorb" (training) mode of keyboard tracking */
+    if(lastKey==MAKE_SHORTCUT(CS_UI_FUNCS, UC_ZOOM))
+    {
+      if(key!=(MAKE_SHORTCUT(CS_CONTROL, VC_LCTRL) | KS_CTRL) &&
+         key!=(MAKE_SHORTCUT(CS_CONTROL, VC_RCTRL) | KS_CTRL))
+      {
+        lastKey = key | KS_PHYSICAL;
+      }
+    }
+    else
+      lastKey = key;
+
+    /* Mask out shift on everything except for tabulator */
+    if(lastKey != (MAKE_SHORTCUT( CS_CONTROL, VC_TAB ) | KS_SHIFT))
+      lastKey &= ~KS_SHIFT;
+
+    if(lastKey==(MAKE_SHORTCUT(CS_UI_FUNCS, UC_MENU) | KS_PHYSICAL))
+    {
+      /* Leave "absorb" mode */
+      keyboardTraining = FALSE;
+      MacroSetAbsorbMode(FALSE);
+      SayOptr(@KeyboardTrainingOff);
+      return;
+    }
+
+    if((lastKey==MAKE_SHORTCUT(CS_UI_FUNCS, UC_ZOOM) || 
+        lastKey==MAKE_SHORTCUT(CS_UI_FUNCS, UC_BACKLIGHT)) &&
+       savedLastKey!=MAKE_SHORTCUT(CS_UI_FUNCS, UC_BACKLIGHT))
+    {
+      /* Special names for TALX-defined special shift keys */
+      if(lastKey==MAKE_SHORTCUT(CS_UI_FUNCS, UC_ZOOM))
+        keyName = PL("TALXKey");
+      else
+        keyName = PL("TALXEsc");
+    }
+    else if((lastKey&0xf00)==MAKE_SHORTCUT(CS_BSW,0) && (byte)lastKey &&
+            !(lastKey & (KS_ALT|KS_CTRL|KS_PHYSICAL)))
+    {
+      singleKeyBuf[0] = (char)lastKey;// Append letter to pending string
+      singleKeyBuf[1] = 0;
+      keyName = singleKeyBuf;
+    }
+    else                              // Look for plain text version of string
+    {
+      struct keyTable_struct *keyTable;
+
+      MemLock(OptrToHandle(@keyTableChunk));
+      keyTable = LMemDeref(@keyTableChunk);
+      for(i=0; keyTable[i].key; i++)
+        if(keyTable[i].key==lastKey)
+        {
+          if((keyTable[i].flags & SPKALWAYS) || keyboardTraining)
+          {
+            keyName = keyTable[i].text;
+          }
+          if(keyTable[i].flags & NAVKEY)
+            timerEventType = TET_NAV_KEY;
+          break;
+        }
+      MemUnlock(OptrToHandle(@keyTableChunk));
+    }
+
+    if(keyboardTraining)
+    {
+      /* Backlight "escapes" to original function of Zoom/Backlight key,
+         so don't remember escaped key for changing the interpretation
+         of the following key. */
+      if(savedLastKey==MAKE_SHORTCUT(CS_UI_FUNCS, UC_BACKLIGHT))
+        lastKey = 0;
+
+      if(keyName)
+        SayKey(keyName);
+      return;
+    }
+
+    if(timerHandle)
+      TimerStop(timerHandle, timerID);
+
+    /* In Braille mode, send first event immediately for fast reactions */
+    timerHandle = TimerStart(TIMER_EVENT_CONTINUAL, 
+      oself, G_brailleMode? 0 : POLLING_INTERVAL, 
+      MSG_MAPP_TIMER, POLLING_INTERVAL, &timerID);
+
+    /* Always restart total polling duration at every keystroke */
+    count = POLLING_COUNT;
+
+    /* We we are in an editable text object, intercept cursor keys to
+       speak appropriate part of text */
+    if(G_lastObj.textObj)
+    {
+      /* If we are on a screen with a combined text/menu entry field,
+         any key is handled like navigation key because it could move
+         the current selection. */
+      if(G_lastObj.flags & ORF_MENU_FOCUS)
+        timerEventType = TET_INCR_SEARCH;
+
+      else if((key & ~KS_SHIFT)==MAKE_SHORTCUT(CS_CONTROL, VC_LEFT) ||
+              (key & ~KS_SHIFT)==MAKE_SHORTCUT(CS_CONTROL, VC_RIGHT))
+        timerEventType = TET_SAY_LETTER;
+
+      else if((key & ~KS_SHIFT)==(MAKE_SHORTCUT(CS_CONTROL, VC_LEFT) | KS_CTRL) ||
+              (key & ~KS_SHIFT)==(MAKE_SHORTCUT(CS_CONTROL, VC_RIGHT) | KS_CTRL))
+        timerEventType = TET_SAY_WORD;
+
+      else if(ANY_KS(key)==MAKE_SHORTCUT(CS_CONTROL, VC_UP) ||
+              ANY_KS(key)==MAKE_SHORTCUT(CS_CONTROL, VC_DOWN) ||
+              (key & ~KS_SHIFT)==(MAKE_SHORTCUT(CS_CONTROL, 'h') | KS_CTRL) ||
+              (key & ~KS_SHIFT)==(MAKE_SHORTCUT(CS_CONTROL, 'e') | KS_CTRL))
+        timerEventType = TET_SAY_LINE;
+
+      else if(!G_brailleMode && key==MAKE_SHORTCUT(CS_CONTROL, VC_BACKSPACE))
+      {
+        /* Remember backspace character to speak when the chance arrives */
+        backspChar = G_lastObjTexts.textObjBackspChar;
+        *keystr = 0;                    // forget about previously typed word
+        *keyName = 0;                   // make sure "Backspace" is not spoken
+      }
+
+      else if(G_brailleMode && (key==MAKE_SHORTCUT(CS_CONTROL, VC_ENTER) ||
+                                key==MAKE_SHORTCUT(CS_CONTROL, VC_BACKSPACE)))
+        timerEventType = TET_SAY_LINE;
+
+      if(G_brailleMode && timerEventType!=TET_INCR_SEARCH && 
+         (timerEventType!=TET_NAV_KEY || 
+           (lastKey&0xf00)==MAKE_SHORTCUT(CS_BSW,0) && (byte)lastKey &&
+             !(lastKey & (KS_ALT|KS_CTRL))))
+      {
+        timerEventType = TET_SAY_LINE;
+      }
+    }
+
+    /* Not needed in Braille mode */
+    if(!G_brailleMode)
+    {
+      if(keyName && timestamp > lastSpeakTick && 
+         strlen((char *)keystr)+strlen(keyName)<sizeof(keystr))
+      {
+        speakKeystr = strlen((char *)keystr);
+        strcat((char *)keystr, keyName);
+      }
+    }
+}
+
+@method SpeakApplicationClass, MSG_MAPP_TIMER
+{
+    /* Do not poll unless our event queue is empty */
+    if(!G_brailleMode && 
+      GeodeInfoQueue(
+        ThreadGetInfo(ProcInfo(GeodeGetProcessHandle()), TGIT_QUEUE_HANDLE)) > 0)
+    {
+      return;
+    }
+
+    if(timerHandle)
+    {
+      count--;
+      if(count==0)
+      {
+        TimerStop(timerHandle, timerID);
+        timerHandle = 0;
+        timerEventType = TET_NON_NAV_KEY;
+      }
+
+      /* Ignore some tick counts after a certain event-less time */
+      if(count < (POLLING_COUNT - POLLING_SLOW_LIMIT) &&
+         count % POLLING_SLOW_DIVIDER)
+      {
+        return;
+      }
+    }
+
+    if(SaySomething(oself, TRUE, timerEventType))
+    {
+      if(G_sayWhat & SAY_WHAT_IS_PROGRESS)
+      {
+        G_progressCount++;
+        if(G_progressCount%PROGRESS_BEEP_INTERVALS==0)
+          UserStandardSound(SST_CUSTOM_NOTE, 1000, 2);
+      }
+      else
+      {
+        G_progressCount = 0;
+      }       
+
+      *keystr = 0;
+      speakKeystr = 0;
+      backspChar = 0;
+
+      /* Always restart total polling duration whenever something changed */
+      count = POLLING_COUNT;
+
+      /* Some events are not expected to take long */
+      if(timerEventType==TET_SAY_LINE || timerEventType==TET_SAY_WORD || 
+         timerEventType==TET_SAY_LETTER || timerEventType ==TET_SAY_CONTINUE ||
+         timerEventType==TET_SAY_SELECTED_TEXT)
+      {
+        timerEventType = TET_NON_NAV_KEY;
+      }
+    }
+    else
+    {
+      if(!G_brailleMode)
+        SayKeystr();
+    }
+}
+
+#pragma codeseg SPEAK_FUNC_TEXT
+
+@method SpeakApplicationClass, MSG_MAPP_READ_WINDOW
+{
+    SaySomething(oself, TRUE, TET_FORCE_VERBOSE);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_BRING_TO_FRONT
+{
+    @send self::MSG_GEN_BRING_TO_TOP();
+}
+
+@method SpeakApplicationClass, MSG_MAPP_INVOKE_HELP
+{
+    optr im = ConstructOptr(MacroGetInputProcess(), 0);
+
+    /* Send "Ins" key (invoke help) to Input Manager */
+    @send im::MSG_META_KBD_CHAR((CS_CONTROL<<8) | VC_INS, 0, 0);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SAY_LETTER
+{
+    SaySomething(oself, TRUE, TET_SAY_LETTER);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SAY_WORD
+{
+    SaySomething(oself, TRUE, TET_SAY_WORD);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SPELL_WORD
+{
+    SaySomething(oself, TRUE, TET_SPELL_WORD);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_READ_SELECTION
+{
+    SaySomething(oself, TRUE, TET_READ_SELECTION);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SPELL_SELECTION
+{
+    SaySomething(oself, TRUE, TET_SPELL_SELECTION);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SAY_CONTINUE
+{
+    SaySomething(oself, TRUE, TET_SAY_CONTINUE);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SAY_SELECTED_TEXT
+{
+    SaySomething(oself, TRUE, TET_SAY_SELECTED_TEXT);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_MAYBE_SAY_NEXT
+{
+    if(speakContinue)
+      SaySomething(oself, TRUE, TET_SAY_CONTINUE);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_TRAINING_ENABLE
+{
+    /* Enable "absorb" mode */
+    keyboardTraining = TRUE;
+    MacroSetAbsorbMode(TRUE);
+
+    SayOptr(@KeyboardTrainingOn);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_READ_INDICATOR
+{
+    optr indicator;
+    GeodeHandle gh;
+
+    gh = GeodeFind("indicato", GEODE_NAME_SIZE, 0, 0);
+    if(gh)
+    {
+      indicator = GeodeGetAppObject(gh);
+      if(indicator)
+        SaySomething(indicator, FALSE, TET_READ_TREE);
+    }
+}
+
+@method SpeakApplicationClass, MSG_MAPP_READ_DATE_TIME
+{
+    char buf[MAX_SPEAK_BUF];
+    TimerDateAndTime time;
+
+    TimerGetDateAndTime(&time);         // Get current time/date
+    
+    /* Assemble time/date string */
+    LocalFormatDateTime(buf, DTF_HM_24HOUR, &time);
+    strcat(buf, " ");
+    LocalFormatDateTime(buf+strlen(buf), DTF_SHORT, &time);
+    
+    /* Read it */
+    TranslateString(buf, !G_brailleMode);
+    SpeakSentence((byte *)buf, NullOptr);   
+}
+
+@method SpeakApplicationClass, MSG_MAPP_READ_SOFTKEYS
+{
+    SaySomething(oself, TRUE, TET_READ_SOFTKEYS);
+}
+
+/*
+ ***************************************************************************
+ *              Change notifications for program settings
+ ***************************************************************************
+ */
+
+@method SpeakApplicationClass, MSG_MAPP_OUTPUT_CHANGED
+{
+    G_output = (SynthType)selection;
+    if(G_output==SPEECH_HTBRAILLE || G_output==SPEECH_ALBRAILLE)
+      G_brailleMode = TRUE;
+    else
+      G_brailleMode = FALSE;
+
+    /* Remember changed "other" output */
+    if(G_output!=SPEECH_INTERNAL && G_alternativeOutput != G_output)
+    {
+      G_alternativeOutput = G_output;
+      InitFileWriteInteger("TALX", "alternativeOutput", G_alternativeOutput);
+      InitFileCommit();
+    }
+
+    if(G_output==SPEECH_EXTERNAL)
+    {
+      @send LanguageGroup::MSG_GEN_SET_NOT_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+      @send TextLanguageGroup::MSG_GEN_SET_NOT_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+      @send PitchGroup::MSG_GEN_SET_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+      @send SpeedGroup::MSG_GEN_SET_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+      @send SpeechOptionsGroup::MSG_GEN_SET_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+    }
+    else if(G_output==SPEECH_INTERNAL)
+    {
+      @send PitchGroup::MSG_GEN_SET_NOT_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+      @send SpeedGroup::MSG_GEN_SET_NOT_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+      @send LanguageGroup::MSG_GEN_SET_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+      @send TextLanguageGroup::MSG_GEN_SET_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+      @send SpeechOptionsGroup::MSG_GEN_SET_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+    }
+    else
+    {
+      /* Disable all speech-related options */
+      @send SpeechOptionsGroup::MSG_GEN_SET_NOT_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+    }
+
+    @send Output::MSG_META_SAVE_OPTIONS();
+}
+
+@method SpeakApplicationClass, MSG_MAPP_VOLUME_CHANGED
+{
+    @send Volume::MSG_META_SAVE_OPTIONS();
+}
+
+@method SpeakApplicationClass, MSG_MAPP_PITCH_CHANGED
+{
+    @send Pitch::MSG_META_SAVE_OPTIONS();
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SPEED_CHANGED
+{
+    @send Speed::MSG_META_SAVE_OPTIONS();
+}
+
+@method SpeakApplicationClass, MSG_MAPP_LANGUAGE_CHANGED
+{
+    @send Language::MSG_META_SAVE_OPTIONS();
+    SynthReload();
+    if(selection==LANG_NONE)
+    {
+      @send TextLanguageGroup::MSG_GEN_SET_NOT_ENABLED(VUM_DELAYED_VIA_APP_QUEUE);
+    }
+    else
+    {
+      @send TextLanguageGroup::MSG_GEN_SET_ENABLED(VUM_DELAYED_VIA_APP_QUEUE);
+    }
+}
+
+@method SpeakApplicationClass, MSG_MAPP_TEXTLANGUAGE_CHANGED
+{
+    @send TextLanguage::MSG_META_SAVE_OPTIONS();
+    SynthReload();
+}
+
+@method SpeakApplicationClass, MSG_MAPP_ECHO_CHANGED
+{
+    @send Echo::MSG_META_SAVE_OPTIONS();
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SPELLLONG_CHANGED
+{
+    @send SpellLong::MSG_META_SAVE_OPTIONS();
+    G_longSpell = selection;
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SPELLCAPS_CHANGED
+{
+    @send SpellCaps::MSG_META_SAVE_OPTIONS();
+    G_capsSpell = selection;
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SPELLPUNCT_CHANGED
+{
+    @send SpellPunct::MSG_META_SAVE_OPTIONS();
+    G_punctSpell = selection;
+}
+
+/*
+ ***************************************************************************
+ *              Hotkeys to change program settings
+ ***************************************************************************
+ */
+
+/* Move the selection in a GenItemGroup in a (fairly) generic way */
+word NextSelection(optr gig, word mode)
+  #define NEXT_SEL_UP 0
+  #define NEXT_SEL_DOWN 1
+  #define NEXT_SEL_UP_WRAP 2 
+{
+    word id,n,n2,i;
+    optr item;
+    char buf[MAX_SPEAK_BUF];
+
+    id = @call gig::MSG_GEN_ITEM_GROUP_GET_SELECTION();
+    n = @call gig::MSG_GEN_COUNT_CHILDREN();
+
+    n2 = n; // limit endless loops in case of all items being usable
+    item = @call gig::MSG_GEN_ITEM_GROUP_GET_ITEM_OPTR(id);
+    
+    do
+    {
+      i = @call gig::MSG_GEN_FIND_CHILD(item);
+      if(mode==NEXT_SEL_DOWN)             // go to previous
+      {
+        if(i!=(word)-1 && i>0)
+          item = @call gig::MSG_GEN_FIND_CHILD_AT_POSITION(i-1);
+      }
+      else                                // go to next
+      {
+        if(i!=(word)-1 && i+1<n)
+          item = @call gig::MSG_GEN_FIND_CHILD_AT_POSITION(i+1);
+        else if(mode==NEXT_SEL_UP_WRAP)
+          item = @call gig::MSG_GEN_FIND_CHILD_AT_POSITION(0);
+      }
+      id = @call item::MSG_GEN_ITEM_GET_IDENTIFIER();
+      @call gig::MSG_GEN_ITEM_GROUP_SET_SINGLE_SELECTION(id, FALSE);
+    } while(n2-- && !@call item::MSG_GEN_GET_USABLE());
+
+    /* Assemble string to speak from objects */
+    getObjectName(gig, buf, sizeof(buf));
+    strcat(buf, PL("Prop"));
+    getObjectName(item, buf+strlen(buf), sizeof(buf)-strlen(buf));
+    TranslateString(buf, FALSE);
+    SpeakSentence((byte *)buf, NullOptr);
+
+    return id;
+}
+
+void SetSelection(optr gig, word id)
+{
+    optr item;
+    char buf[MAX_SPEAK_BUF];
+
+    @call gig::MSG_GEN_ITEM_GROUP_SET_SINGLE_SELECTION(id, FALSE);
+    item = @call gig::MSG_GEN_ITEM_GROUP_GET_ITEM_OPTR(id);
+
+    if(item)
+    {
+      /* Assemble string to speak from objects */
+      getObjectName(gig, buf, sizeof(buf));
+      strcat(buf, PL("Prop"));
+      getObjectName(item, buf+strlen(buf), sizeof(buf)-strlen(buf));
+      TranslateString(buf, FALSE);
+      SpeakSentence((byte *)buf, NullOptr);
+    }
+}
+
+@method SpeakApplicationClass, MSG_MAPP_NEXT_ECHO
+{
+  NextSelection(@Echo, NEXT_SEL_UP_WRAP);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_NEXT_SPELLCAPS
+{
+  G_capsSpell = NextSelection(@SpellCaps, NEXT_SEL_UP_WRAP);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_NEXT_SPELLLONG
+{
+  G_longSpell = NextSelection(@SpellLong, NEXT_SEL_UP_WRAP);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_NEXT_SPELLPUNCT
+{
+  G_punctSpell = NextSelection(@SpellPunct, NEXT_SEL_UP_WRAP);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_PREV_SPEED
+{
+  if(G_output != SPEECH_EXTERNAL)
+    return;                             // Ignore for all but external speech
+
+  NextSelection(@Speed, NEXT_SEL_DOWN);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_NEXT_SPEED
+{
+  if(G_output != SPEECH_EXTERNAL)
+    return;                             // Ignore for all but external speech
+
+  NextSelection(@Speed, NEXT_SEL_UP);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_PREV_VOLUME
+{
+  NextSelection(@Volume, NEXT_SEL_DOWN);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_NEXT_VOLUME
+{
+  NextSelection(@Volume, NEXT_SEL_UP);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_SWAP_DEVICE
+{
+  word sel;
+
+  /* Identify the "other" selection to use */
+  sel = (G_output==SPEECH_INTERNAL)? G_alternativeOutput : SPEECH_INTERNAL;
+  
+  /* Make sure we are switched when change is announced */
+  @call self::MSG_MAPP_OUTPUT_CHANGED(sel, 1, 0);
+
+  /* Update UI and speek current result */
+  SetSelection(@Output, sel);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_NEXT_LANGUAGE
+{
+  word sel;
+  
+  sel = NextSelection(@Language, NEXT_SEL_UP_WRAP);
+  
+  /* Update UI */
+  @call self::MSG_MAPP_LANGUAGE_CHANGED(sel, 1, 0);
+}
+
+@method SpeakApplicationClass, MSG_MAPP_NEXT_TEXTLANGUAGE
+{
+  NextSelection(@TextLanguage, NEXT_SEL_UP_WRAP);
+}
+
+@method SpeakApplicationClass, MSG_META_QUIT
+{
+    /* Turn off speech for exit procedure */
+    SynthStop(TRUE);
+
+    /* Unload current voice */
+    G_output = SPEECH_OFF;
+    SynthSwitch(SPEECH_OFF);
+        
+    @callsuper();
+}
+
+@method SpeakApplicationClass, MSG_MAPP_TOGGLE_RECORDING
+{
+    /* Toggle recording mode */
+    G_recordingActive = !G_recordingActive;
+
+    /* Play sound according to new mode */
+    if(G_recordingActive)
+    {
+      UserStandardSound(SST_CUSTOM_NOTE, 880, 30);
+    }
+    else
+    {
+      UserStandardSound(SST_CUSTOM_NOTE, 880, 5);
+    }
+}
+
+#pragma SPEAK_BRAILLE_TEXT
+
+/*
+ ***************************************************************************
+ *              Braille keys
+ ***************************************************************************
+ */
+
+@method SpeakApplicationClass, MSG_BRAILLE_KEY_LEFT
+{
+    if(G_brailleOffset)                 // More data to the left?
+    {
+      G_brailleOffset -= G_brailleWidth;// Move back towards beginning of line
+      if((int)G_brailleOffset<0) G_brailleOffset = 0;
+      SaySomething(oself, TRUE, TET_NON_NAV_KEY);
+    }
+    else
+    {
+      if(G_brailleLine==BRL_FOCUS || G_brailleLine==BRL_TEXT)
+      {
+        G_brailleOffset = 0;
+        SynthesizeKey(CS_CONTROL, VC_UP, 0);
+      }
+      else if(G_brailleLine==BRL_PSEUDOCUR)
+      {
+        G_brailleOffset = 0;
+        SaySomething(oself, TRUE, TET_SAY_PREV_LINE);
+      }
+      else if(G_brailleLine==BRL_TITLE)
+      {
+        @call self::MSG_BRAILLE_KEY_FOCUS();
+      }
+    }
+}
+
+@method SpeakApplicationClass, MSG_BRAILLE_KEY_RIGHT
+{
+    if(G_brailleMore)                   // More data to the right?
+    {
+      G_brailleOffset += G_brailleWidth;// Move towards end of line
+      SaySomething(oself, TRUE, TET_NON_NAV_KEY);
+    }
+    else
+    {
+      if(G_brailleLine==BRL_FOCUS || G_brailleLine==BRL_TEXT)
+      {
+        G_brailleOffset = 0;
+        SynthesizeKey(CS_CONTROL, VC_DOWN, 0);
+      }
+      else if(G_brailleLine==BRL_PSEUDOCUR)
+      {
+        G_brailleOffset = 0;
+        SaySomething(oself, TRUE, TET_SAY_NEXT_LINE);
+      }
+      else if(G_brailleLine==BRL_TITLE)
+      {
+        @call self::MSG_BRAILLE_KEY_FOCUS();
+      }
+    }
+}
+
+@method SpeakApplicationClass, MSG_BRAILLE_KEY_ROUTING
+{
+    int i;
+
+    /* Function of Routing keys depends on current line */
+    switch(G_brailleLine)
+    {
+      case BRL_FOCUS:
+        /* If looking at current focus, all routing keys correspond to Key 1 */
+        SynthesizeKey(CS_CONTROL, VC_F1, 0);
+        break;
+
+      case BRL_KEYS:
+        {
+          word pos = keyindex+G_brailleOffset;
+          word start,len;
+
+          start = 0;
+          for(i=0; i<5; i++)
+          {
+            if(i<4 && G_lastObjTexts.buttonLabelsText[i][0])
+            {
+              len = LengthString(G_lastObjTexts.buttonLabelsText[i])+2;
+            }
+            else if(i==4 && (G_lastObj.flags & ORF_HAS_MENU))
+            {
+              len = 999;                // length of menu placeholder: unknown
+            }
+            else
+            {
+              len = 0;
+            }
+            if(pos>=start && pos<start+len)
+              break;
+            start += len? (len+1) : 0;  // advance by label + comma
+          }
+
+          if(i<4)
+          {
+            /* Buttons 1..4 correspond to F1..F4 */
+            SynthesizeKey(CS_CONTROL, VC_F1 + i, 0);
+          }
+          else if(i==4)
+          {
+            /* Last is menu key */
+            SynthesizeKey(CS_UI_FUNCS, UC_MENU, 0);
+          }
+        }
+        break;
+
+      case BRL_APPKEYS:
+        /* Calculate key position that was hit (3 letters + 1 space) */
+        i = (keyindex/4);
+
+        /* Hit letter, not space? */
+        if(i<10 && keyindex%4!=3)
+        {
+          if(i<8)
+          {
+            /* First 8 positions correspond to F5..F12 */
+            SynthesizeKey(CS_CONTROL, VC_F5 + i, 0);
+          }
+          else if(i==8)
+          {
+            /* Last position (Extras) is Ctrl+F12 */
+            SynthesizeKey(CS_CONTROL, VC_F12, SS_LCTRL);
+          }
+          else if(i==9)
+          {
+            /* Press Alt key to open character dialog */
+            SynthesizeKey(CS_CONTROL, VC_ALT_GR, 0);
+          }
+        }
+        break;
+
+      case BRL_TEXT:
+      case BRL_PSEUDOCUR:
+        /* Check if routing key was pressed for text position */
+        if(G_brTextStart != CURSOR_POS_NONE &&
+          keyindex+G_brailleOffset >= G_brTextStart)
+        {
+          G_eventData = keyindex + G_brailleOffset - G_brTextStart;
+          /* Depending on mode, set cursor or end marker */
+          if(G_brRoutingMarkObj==G_lastObj.textObj)
+          {
+            SaySomething(oself, TRUE,
+              (G_brailleLine==BRL_TEXT)?
+                TET_ACTION_MARK_CURSOR : TET_ACTION_MARK_PSEUDO);
+            G_brRoutingMarkObj = NullOptr;
+          }
+          else
+          {
+            SaySomething(oself, TRUE,
+              (G_brailleLine==BRL_TEXT)?
+                TET_ACTION_ROUTING_CURSOR : TET_ACTION_ROUTING_PSEUDO);
+          }
+        }
+        break;
+    }
+}
+
+@method SpeakApplicationClass, MSG_BRAILLE_KEY_FOCUS
+{
+    Boolean empty;
+
+    G_brailleOffset = 0;
+
+    /* Start at last line (will wrap to FOCUS) */
+    if(G_brailleLine<BRL_FOCUS || G_brailleLine>BRL_TREE)
+      G_brailleLine = BRL_TREE;
+
+    /* Arbitrarily select Title if no object is available */
+    if(!(G_lastObj.focusParent || G_lastObj.focusLabel ||
+         G_lastObj.textObj || G_lastObj.treeObj))
+    {
+      G_brailleLine = BRL_TITLE;
+      return;
+    }
+    
+    do {
+      /* Cycle through FOCUS, TEXT, TREE */
+      if(++G_brailleLine>BRL_TREE)
+        G_brailleLine = BRL_FOCUS;
+
+      /* Find out if line is not to be displayed */
+      if(G_brailleLine==BRL_FOCUS)
+        empty = (!G_lastObj.focusParent && !G_lastObj.focusLabel) ||
+         (G_lastObj.focusParent && !G_lastObj.focusLabel && G_lastObj.textObj);
+      else if(G_brailleLine==BRL_TEXT)
+        empty = !G_lastObj.textObj;
+      else
+        empty = !G_lastObj.treeObj;
+    } while(empty);                     // Find something
+
+    SaySomething(oself, TRUE, TET_NON_NAV_KEY);
+}
+
+@method SpeakApplicationClass, MSG_BRAILLE_KEY_KEYS
+{
+    /* Got to soft key line */
+    G_brailleLine = BRL_KEYS;
+    G_brailleOffset = 0;
+    SaySomething(oself, TRUE, TET_NON_NAV_KEY);
+}
+
+@method SpeakApplicationClass, MSG_BRAILLE_KEY_STATUS
+{
+    /* Read status indicator */
+    G_brailleOffset = 0;
+    @call self::MSG_MAPP_READ_INDICATOR(0);
+}
+
+@method SpeakApplicationClass, MSG_BRAILLE_KEY_TITLE
+{
+    /* Got to window title */
+    G_brailleLine = BRL_TITLE;
+    G_brailleOffset = 0;
+    SaySomething(oself, TRUE, TET_NON_NAV_KEY);
+}
+
+@method SpeakApplicationClass, MSG_BRAILLE_KEY_PSEUDOCUR
+{
+    /* Got to window title */
+    G_brailleLine = BRL_PSEUDOCUR;
+    G_brailleOffset = 0;
+    G_lastObj.pseudoCursor = NullOptr;  /* reqacquire pseudo cursor */
+    SaySomething(oself, TRUE, TET_SAY_NEXT_LINE);
+}
+
+@method SpeakApplicationClass, MSG_BRAILLE_KEY_APPKEYS
+{
+    /* Got to application key line */
+    G_brailleLine = BRL_APPKEYS;
+    G_brailleOffset = 0;
+    SaySomething(oself, TRUE, TET_NON_NAV_KEY);
+}
+
+@method SpeakApplicationClass, MSG_BRAILLE_KEY_MARK_ROUTING
+{
+    if(G_brRoutingMarkObj==G_lastObj.textObj)
+    {
+      UserStandardSound(SST_CUSTOM_NOTE, 880, 5);
+      G_brRoutingMarkObj = NullOptr;
+    }
+    else
+    {
+      UserStandardSound(SST_CUSTOM_NOTE, 880, 15);
+      G_brRoutingMarkObj = G_lastObj.textObj;
+    }
+}

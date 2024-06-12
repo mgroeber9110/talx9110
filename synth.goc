@@ -1,0 +1,897 @@
+@include <stdapp.goh>
+@include <foam.goh>
+@include <internal/resp/vrecui.goh>
+@include <internal/resp/indicato.goh>
+@include <internal/respondr.goh>
+@include <security.goh>
+#include <streamC.h>
+
+#include <ansi/stdio.h>
+#include <ansi/string.h>
+
+@include "common.goh"
+
+@extern object SpeakApp;
+@extern object Volume;
+@extern object Speed;
+@extern object Pitch;
+@extern object Language;
+
+@extern object LanguageNone;
+@extern object LanguageDE;
+@extern object LanguageEN;
+@extern object LanguageIT;
+@extern object LanguageSE;
+@extern object LanguageNL;
+@extern object LanguageFR;
+@extern object LanguageES;
+
+
+#define SPEAK_FILE "speak.wav"
+#define SPEAK_FILE_RECORDING "speak%03d.wav"
+#define SPEAKLIB_FILE_MASK "speaklib*"
+
+#define TONE_PRIORITY 8 /* 15 is recommended, but keeps silent during call */
+
+#define ETEX_PORT      SERIAL_COM1
+#define ETEX_IBUF_SIZE 512
+#define ETEX_OBUF_SIZE 512
+#define ETEX_FORMAT    ((SERIAL_PARITY_NONE << SERIAL_FORMAT_PARITY_OFFSET) | \
+                        (SERIAL_LENGTH_8 << SERIAL_FORMAT_LENGTH_OFFSET))
+#define ETEX_BAUD      SERIAL_BAUD_9600
+
+
+Boolean synthTalking;
+Boolean synthReload = TRUE;
+SynthType synthType = SPEECH_OFF;
+TimerHandle synthTimerHandle, serialTimerHandle;
+word synthTimerID, serialTimerID;
+word synthInUse, serialInUse;
+GeodeHandle serialDriver;
+
+word G_recordingIndex;
+Boolean G_recordingActive;
+
+/*
+ ***************************************************************************
+ *              Code for word-by-word speech synthesis
+ ***************************************************************************
+ */
+
+#define MAX_VOICES 20
+
+/* Loaded voices */
+word voices;
+FileHandle libfh[MAX_VOICES];
+MemHandle voicemh[MAX_VOICES];
+VoiceHeader voicehead[MAX_VOICES];
+
+#define WORDS_PER_LIST (3072/sizeof(dword))
+
+typedef struct {
+  dword     WL_lastID;
+  word      WL_nWords;
+  MemHandle WL_ID;
+  MemHandle WL_pos;
+} WordList;
+
+unsigned long calc_normalized_crc(byte *buf, word len)
+{
+    byte c,c1;
+    unsigned long crc = 0xFFFFFFFF;
+    Boolean first = TRUE;
+
+    for(; len; buf++,len--)
+    {
+      if(isword(*buf))
+      {
+        c = toupper(*buf);
+        c1 = 0;
+        switch(c)      
+        {
+          /* 
+           * "Umlaut" transcription
+           */
+          case 0x80:
+            c = 'A'; c1 = 'E';
+            break;
+          case 0x85:
+            c = 'O'; c1 = 'E';
+            break;
+          case 0x86:
+            c = 'U'; c1 = 'E';
+            break;
+          case 0xA7:
+            c = 'S'; c1 = 'S';
+            break;
+          /*
+           * Remove 's and trailing ' (mostly for English)
+           */
+          case '\'':
+            if(len==2 && toupper(buf[1])=='S')
+            {
+              c = 'S';
+              buf++;
+            }
+            else if(len==1 && !first)
+              c = 0;
+            break;
+        }
+        if(c)
+          crc = ((crc>>8) & 0x00FFFFFF) ^ crc_table[ (crc^c) & 0xFF ];
+        if(c1)
+          crc = ((crc>>8) & 0x00FFFFFF) ^ crc_table[ (crc^c1) & 0xFF ];
+        
+        first = FALSE;                  // processed first character
+      }
+    }
+
+    return crc^0xFFFFFFFF;
+}
+
+int LangCode(TCHAR c1, TCHAR c2)
+{
+   int ret = LANG_NONE;
+
+   c1 = toupper(c1);
+   c2 = toupper(c2);
+
+   if(c1=='D' && c2=='E')      ret = LANG_GERMAN;
+   else if(c1=='E' && c2=='N') ret = LANG_ENGLISH;
+   else if(c1=='I' && c2=='T') ret = LANG_ITALIAN;
+   else if(c1=='S' && c2=='E') ret = LANG_SWEDISH;
+   else if(c1=='N' && c2=='L') ret = LANG_DUTCH;
+   else if(c1=='F' && c2=='R') ret = LANG_FRENCH;
+   else if(c1=='S' && c2=='P') ret = LANG_SPANISH;
+
+   return ret;
+}
+
+void HandleVoiceFile(TCHAR *fname, int loadLang, Boolean *langAvail)
+{
+    dword *p;
+    WordList *wl;
+    dword n,nwl;
+    word words;
+    MemHandle mh;
+    int lang = LANG_NONE;
+
+    // Find extension dot 
+    char *ext = strrchr(fname, '.');
+
+    if(ext)
+    {
+      int extlen = strlen(ext);
+
+      /* Extension ends in two letters? */
+      if(extlen>=2 && isalpha(ext[extlen-2]) && isalpha(ext[extlen-1]))
+      {
+        /* Identify language code from two-letter code */
+        lang = LangCode(ext[extlen-2], ext[extlen-1]);
+      }
+    }
+
+    /* Set flags for all the languages we encountered */
+    if(lang!=LANG_NONE)
+      langAvail[lang-LANG_FIRST] = TRUE;
+
+    /* Should the language be ignored? */
+    if(lang!=loadLang)
+      return;
+
+    /* Open new file from list of found names */
+    libfh[voices] = FileOpen(fname, FILE_ACCESS_R | FILE_DENY_W);
+    if(libfh[voices])
+    {
+      /* Get number of fragments */
+      FileRead(libfh[voices], &voicehead[voices], sizeof(VoiceHeader), TRUE);
+
+      /* Allocate space for word list headers */
+      nwl = (voicehead[voices].ndir + WORDS_PER_LIST - 1) / WORDS_PER_LIST;
+      voicemh[voices] = MemAlloc(nwl * sizeof(WordList), HF_DYNAMIC, 0);
+      wl = MemLock(voicemh[voices]);
+      
+      /* Load word IDs into as many blocks as indicated by nwl */
+      for(n=0; n<nwl; n++)
+      {
+        if((n+1)*WORDS_PER_LIST > voicehead[voices].ndir)
+          words = (word)(voicehead[voices].ndir % WORDS_PER_LIST);
+        else
+          words = WORDS_PER_LIST;
+        mh = MemAlloc(words * sizeof(dword), HF_DYNAMIC, 0);
+        p = MemLock(mh);
+        FileRead(libfh[voices], p, words * sizeof(dword), TRUE);
+        wl[n].WL_ID = mh;
+        wl[n].WL_nWords = words;
+        wl[n].WL_lastID = (n==nwl-1)? 0xFFFFFFFF : p[words-1];
+        MemUnlock(mh);
+      }
+
+      /* Load word positions into as many blocks as indicated by nwl */
+      for(n=0; n<nwl; n++)
+      {
+        if((n+1)*WORDS_PER_LIST > voicehead[voices].ndir)
+          words = (word)(voicehead[voices].ndir % WORDS_PER_LIST);
+        else
+          words = WORDS_PER_LIST;
+        mh = MemAlloc(words * sizeof(dword), HF_DYNAMIC, 0);
+        p = MemLock(mh);
+        FileRead(libfh[voices], p, words * sizeof(dword), TRUE);
+        wl[n].WL_pos = mh;
+        MemUnlock(mh);
+      }
+
+      MemUnlock(voicemh[voices]);
+
+      voices++;                         // Voice loaded successfully - keep it
+    }    
+}
+
+void LoadVoice(void)
+{
+  FileEnumParams fileEnumParams;
+  MemHandle fileNameListHandle;
+  word filesNotHandled, numOfFiles;
+  TCHAR * fileNameListPtr;
+  int lang, i;
+  Boolean langAvail[LANG_COUNT];
+  optr langItems[] = {
+    @LanguageDE,
+    @LanguageEN,
+    @LanguageIT,
+    @LanguageSE,
+    @LanguageNL,
+    @LanguageFR,
+    @LanguageES,
+  };
+
+  synthInUse = 0;
+  memset(langAvail, 0, sizeof(langAvail));
+
+  /* Get alternative language, if any */
+  lang = (int)(@call Language::MSG_GEN_ITEM_GROUP_GET_SELECTION());
+
+  /*
+   * Set the search flags to search all files, but not directories.
+   * (FILE_ENUM_ALL_FILE_TYPES does not include FESF_DIRS).
+   */
+  fileEnumParams.FEP_searchFlags = FESF_NON_GEOS | FESF_CALLBACK;
+  /*
+   * Return the file's Geos filename.  FE_BUFSIZE_UNLIMITED
+   * allows the return buffer size to be as large as necessary.
+   */
+  fileEnumParams.FEP_returnAttrs = (void *) FESRT_NAME;
+  fileEnumParams.FEP_returnSize = FILE_LONGNAME_BUFFER_SIZE;
+  fileEnumParams.FEP_bufSize = FILE_LONGNAME_BUFFER_SIZE * MAX_VOICES;
+  /*
+   * Set matchAttrs to zero so it will match anything.
+   * Don't skip any files
+   * Use pre-defined callback to match files to wildcard pattern.
+   */
+  fileEnumParams.FEP_matchAttrs = 0;
+  fileEnumParams.FEP_skipCount = 0;
+  fileEnumParams.FEP_callback = FESC_WILDCARD;
+  fileEnumParams.FEP_cbData1 = (dword)SPEAKLIB_FILE_MASK;
+  fileEnumParams.FEP_cbData2 = TRUE;
+
+  numOfFiles = FileEnum( &fileEnumParams,&fileNameListHandle,
+     &filesNotHandled );
+
+  /*
+   * Open all voice files in the list returned by FileEnum.
+   * First check to see if any files where found and the buffer
+   * was successfully created (fileNameListHandle will be
+   * NullHandle, which is zero, the buffer couldn't be created).
+   */
+  if(!(numOfFiles && fileNameListHandle))
+    return;
+
+  voices = 0;                           // No voices found yet
+
+  // Load base language first
+  fileNameListPtr = MemLock(fileNameListHandle);  
+  i = 0;
+  while(i++<numOfFiles && voices<MAX_VOICES)
+  {
+    HandleVoiceFile(fileNameListPtr, LANG_NONE, langAvail);
+
+    /* Advanced to next file matching the pattern */
+    fileNameListPtr += FILE_LONGNAME_BUFFER_SIZE;
+  }
+
+  // Load alternative language afterwards, if any
+  if(lang != LANG_NONE)
+  {
+    fileNameListPtr = MemDeref(fileNameListHandle);  
+    i = 0;
+    while(i++<numOfFiles && voices<MAX_VOICES)
+    {
+      HandleVoiceFile(fileNameListPtr, lang, langAvail);
+
+      /* Advanced to next file matching the pattern */
+      fileNameListPtr += FILE_LONGNAME_BUFFER_SIZE;
+    }
+  }
+
+  MemFree(fileNameListHandle);
+
+  /* Set available languages enabled */
+  for(i=0; i<LANG_COUNT; i++)
+    if(langAvail[i])
+    {
+      @call langItems[i]::MSG_GEN_SET_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+    }
+    else
+    {
+      @call langItems[i]::MSG_GEN_SET_NOT_USABLE(VUM_DELAYED_VIA_APP_QUEUE);
+    }
+}
+
+void UnloadVoice(void)
+{
+    word n;
+    WordList *wl;
+ 
+    if(synthInUse)
+    {
+      TimerStop(synthTimerHandle, synthTimerID);
+      synthInUse = 0;
+    }
+
+    while(voices--)                     // close all voices
+    {
+      /*
+       * Free memory blocks used by voice
+       */
+      wl = MemLock(voicemh[voices]);
+      for(n=0; n==0 || wl[n-1].WL_lastID < 0xFFFFFFFF; n++)
+      {
+        MemFree(wl[n].WL_ID);
+        MemFree(wl[n].WL_pos);
+      }
+      MemFree(voicemh[voices]);
+
+      FileClose(libfh[voices], FALSE);
+      libfh[voices] = NULL;
+    }   
+}
+
+/*
+ * Nokia 9110 compatible header for RT24 file. Raw data is appended to this.
+ */
+const byte RT24head[] = {
+0x52,0x49,0x46,0x46,0x00,0x00,0x00,0x00,0x57,0x41,0x56,0x45,0x66,0x6D,0x74,0x20,
+0x22,0x00,0x00,0x00,0x74,0x00,0x01,0x00,0x40,0x1F,0x00,0x00,0x2C,0x01,0x00,0x00,
+0x1B,0x00,0x10,0x00,0x10,0x00,0x56,0x4F,0x58,0x2E,0x08,0x00,0x00,0x00,0x00,0x00,
+0x00,0x00,0x56,0x4F,0x58,0x61,'d', 'a', 't', 'a', 0x00,0x00,0x00,0x00
+};
+#define RT24_totalSize_ofs 4
+#define RT24_dataSize_ofs (sizeof(RT24head)-4)
+
+FileHandle RT24Open(char *name)
+{
+    FileHandle fh;
+
+    fh = FileOpen(name, FILE_ACCESS_W | FILE_DENY_RW);
+    if(!fh)
+    {
+      fh = FileCreate(name, FCF_NATIVE | FILE_CREATE_TRUNCATE | 
+        FILE_ACCESS_W | FILE_DENY_RW, 0);
+    }
+
+    if(fh)
+      FileWrite(fh, RT24head, sizeof(RT24head), FALSE);
+
+    return fh;
+}
+
+Boolean RT24Append(FileHandle fh, byte *str, word len, Boolean invert)
+{
+    static byte WAVbuf[512];
+    word n,i,words;
+    dword pos,size,*p;
+    unsigned long id;
+    MemHandle idmh,posmh;
+    WordList *wl;
+    word voice, actvoice;
+
+    if(!libfh) return FALSE;            // exit if no dictionary
+
+    if(str)
+      id = calc_normalized_crc(str, len);
+    else
+      id = 0x00000000;
+    
+    /*
+     * Find what voice/table the word is in, and get its data
+     */
+    for(voice=0; voice<voices; voice++)
+    {
+      actvoice = invert? (voices-voice-1) : voice;
+
+      wl = MemLock(voicemh[actvoice]);
+      for(n=0; wl[n].WL_lastID < id; n++)
+        ;
+      idmh = wl[n].WL_ID;
+      posmh = wl[n].WL_pos;
+      words = wl[n].WL_nWords;
+      MemUnlock(voicemh[actvoice]);
+    
+      p = MemLock(idmh);
+      for(i=0; i<words && p[i]!=id; i++)
+        ;
+      MemUnlock(idmh);
+
+      if(i<words) break;                // Abort if word was found
+    }
+
+    if(voice>=voices) return FALSE;     // Ignore if not in any dictionary
+
+    p = MemLock(posmh);
+    pos = p[i] & 0x3fffff;
+    size = p[i] >> 22;
+    MemUnlock(posmh);
+
+    FilePos(libfh[actvoice], pos, FILE_POS_START);
+    do {
+      n = FileRead(libfh[actvoice], WAVbuf, sizeof(WAVbuf), FALSE);
+      if(n)
+      {
+        if(n>size) n = size;
+        FileWrite(fh, WAVbuf, n, FALSE);
+      }
+      size -= n;                        // count down data
+    } while(size && n);
+
+    return TRUE;
+}
+
+dword RT24Close(FileHandle fh)
+{
+    dword len,totalSize,dataSize;
+
+    len = FilePos(fh, 0, FILE_POS_RELATIVE);
+    totalSize = len - RT24_totalSize_ofs - 4;
+    dataSize = len - RT24_dataSize_ofs - 4;
+
+    FilePos(fh, RT24_totalSize_ofs, FILE_POS_START);
+    FileWrite(fh, &totalSize, sizeof(totalSize), FALSE);
+    FilePos(fh, RT24_dataSize_ofs, FILE_POS_START);
+    FileWrite(fh, &dataSize, sizeof(dataSize), FALSE);
+
+    FileTruncate(fh, len, FALSE);
+    FileClose(fh, FALSE);
+
+    return len-sizeof(RT24head);        // return raw data size
+}
+
+void RT24Spell(FileHandle fh, byte *str, word len)
+{
+    int j;
+    byte ch[40];
+
+    for(j=0; j<len; j++)
+    {
+      ch[0] = str[j];
+      ch[1] = 0;
+      TranslateLetter(ch, FALSE);
+      RT24Append(fh, ch, strlen((char *)ch), FALSE);
+    }
+}
+
+void RT24AppendSentence(FileHandle outFile, byte *buf)
+{
+    int i,j,i2;
+    Boolean pause;
+    Boolean relaxed;
+    Boolean invert;
+    word next;
+
+    i=i2=j=0; 
+    relaxed = FALSE;
+    invert = FALSE;
+
+    while(i==0 || buf[i-1])       // Loop includes zero terminator
+    {
+      pause = FALSE;
+      next = 0;
+      
+      if(!isword(buf[i]))
+      {
+        if(buf[i]=='.' && !isdigit(buf[i+1])) pause = TRUE;
+        if(buf[i]=='\x0B') invert = !invert;
+        next = i+1;
+      }
+      else if(relaxed)
+      {
+        /* In relaxed mode, additional delimiters are accepted */
+        if(buf[i]=='\'')
+          next = i+1;
+        else if(i>0 && isdigit(buf[i-1]) != isdigit(buf[i]))
+          next = i;
+      }
+
+      if(next)                    // End of a word?
+      {
+        if(i>j)                   // Not just an empty word?
+        {
+          if( !RT24Append(outFile, buf+j, i-j, invert) )
+          {
+            if(relaxed)
+            {
+              RT24Spell(outFile, buf+j, i-j);
+
+              /* Don't pause after spelling a digit-sequence that is followed
+                 by a non-digit (to improve times and dates) */
+              pause = !(isdigit(buf[i-1]) && !isdigit(buf[i+1]));
+            }
+            else
+            {
+              /* Go back to start of word and try in relaxed mode */
+              relaxed = TRUE;
+              i2 = i;
+              i = j-1;
+              next = j;
+            }
+          }
+        }
+        j = next;
+      }
+
+      /* End relaxed mode when reaching end of retried word */
+      if(relaxed && i==i2)
+        relaxed = FALSE;
+
+      i++;
+
+      if(pause)
+      {
+        RT24Append(outFile, NULL, 0, FALSE);
+      }
+    }
+}
+
+void ExpireSynthTimer(void)
+{
+    if(synthInUse)
+    {
+      /* Simulate timer expiring early */
+      TimerStop(synthTimerHandle, synthTimerID);
+      @send,forceQueue,checkDuplicate,replace SpeakApp::MSG_MAPP_SYNTH_TIMER_INT();
+      synthInUse = 1;                   // Duplicate messages will be removed
+    }
+}
+
+Boolean StartSynthTimer(word ticks)
+{
+    Boolean newStart = synthInUse? FALSE : TRUE;
+   
+    ExpireSynthTimer();
+    synthInUse++;                    // Expect one more close event
+    synthTimerHandle = TimerStart(TIMER_EVENT_ONE_SHOT, @SpeakApp, ticks, 
+      MSG_MAPP_SYNTH_TIMER_INT, 0, &synthTimerID);
+
+    return newStart;
+}
+
+@extern method SpeakApplicationClass, MSG_MAPP_SYNTH_TIMER_INT
+{
+    if(synthInUse && (--synthInUse)==0)
+    {
+      @call self::MSG_MAPP_MAYBE_SAY_NEXT();
+    }
+}
+
+
+/* We implement this as a "swap" operation so we only need one procedure
+   for storing and restoring the variable. */
+void SwapVoiceFilename(FileLongName *old)
+{
+    FileLongName buf;
+    GeodeHandle gh;
+    MemHandle mh;
+
+    /* HACK: take string at vrecui::^lSEG11:0x0014 and exchange it
+       with the passed buffer */
+    gh = GeodeFind("vrecui  ", GEODE_NAME_SIZE, 0, 0);
+    if(gh)
+    {
+      mh = GeodeGetGeodeResourceHandle(gh, 11);
+      MemLock(mh);
+      strcpy(&buf, LMemDerefHandles(mh, 0x0014));
+      strcpy(LMemDerefHandles(mh, 0x0014), old);
+      strcpy(old, &buf);
+      MemUnlock(mh);
+    }
+}
+
+void SpeakSentenceInternal(byte *buf)
+{
+    FileHandle outFile;
+    FileLongName outFileName;
+    NEC( FileLongName oldVoiceFile = ""; )
+    NEC( byte vol; )
+    dword size;
+
+    /* Determine file name for speech file */
+    if(G_recordingActive)
+      sprintf(outFileName, SPEAK_FILE_RECORDING, ++G_recordingIndex);
+    else
+      strcpy(outFileName, SPEAK_FILE);
+
+    FoamSetDocumentDir(FDD_TONES);
+    outFile = RT24Open(outFileName);   
+    if(outFile)
+    {
+      RT24AppendSentence(outFile, buf);
+
+      size = RT24Close(outFile);
+      if(size)
+      {
+        
+        /* Do not speak if the lid is closed */
+        if(!RespGetLidStatus()) return;
+
+        /* Abort if phone is not turned on, to avoid error dialog */
+        if(SecurityTryToMakeCellPhoneMediaAvailable()!=CPMS_OK ||
+           G_indicatorCallType == INCT_INDICATOR_CALL_TYPE_FAX ||
+           G_indicatorCallType == INCT_INDICATOR_CALL_TYPE_DATA)
+        {
+          /* Use a distinctive tone to avoid confusion with error beep */
+          UserStandardSound(SST_CUSTOM_NOTE, 440, 15);
+          return;       
+        }
+#ifndef DO_ERROR_CHECKING
+        /* The volume of the tone - can be anything from 1-5 */
+        vol = (byte)(@call Volume::MSG_GEN_ITEM_GROUP_GET_SELECTION());
+        SwapVoiceFilename(&oldVoiceFile);
+        StartPlayVoiceFile(outFileName, TONE_PRIORITY, vol);
+        SwapVoiceFilename(&oldVoiceFile);
+#endif
+        
+        StartSynthTimer((word)(size*60/300)+30);
+      }
+    }
+}
+
+void SpeakStopInternal(void)
+{
+    NEC( StopPlayVoiceFile(0); )
+    ExpireSynthTimer();
+}
+
+
+/*
+ ***************************************************************************
+ *              Code for ETeX speech box support
+ ***************************************************************************
+ */
+
+void ExpireSerialTimer(void)
+{
+    if(serialInUse)
+    {
+      /* Simulate timer expiring early */
+      TimerStop(serialTimerHandle, serialTimerID);
+      @send,forceQueue,checkDuplicate,replace SpeakApp::MSG_MAPP_SYNTH_TIMER_EXT();
+      serialInUse = 1;                  // Duplicate messages will be removed
+    }
+}
+
+Boolean StartSerialTimer(word ticks)
+{
+    Boolean newStart = serialInUse? FALSE : TRUE;
+   
+    ExpireSerialTimer();
+    serialInUse++;                    // Expect one more close event
+    serialTimerHandle = TimerStart(TIMER_EVENT_ONE_SHOT, @SpeakApp, ticks, 
+      MSG_MAPP_SYNTH_TIMER_EXT, 0, &serialTimerID);
+
+    return newStart;
+}
+
+@extern method SpeakApplicationClass, MSG_MAPP_SYNTH_SERIAL
+{
+    byte c;
+
+    /* If we got back a character, the box has finished talking */
+    if(0==SerialReadByte(serialDriver, ETEX_PORT, STREAM_NO_BLOCK, &c))
+      ExpireSerialTimer();
+}
+
+@extern method SpeakApplicationClass, MSG_MAPP_SYNTH_TIMER_EXT
+{
+    if(serialInUse && (--serialInUse)==0)
+    {
+      StreamSetNoNotify(serialDriver, ETEX_PORT,
+        ((1 << STREAM_TYPE_READER_OFFSET) |
+         (STREAM_EVENT_DATA << STREAM_TYPE_EVENT_OFFSET) |
+         (STREAM_MODE_MESSAGE << STREAM_TYPE_HOW_OFFSET)));
+
+      SerialClose(serialDriver, ETEX_PORT, STREAM_DISCARD);
+
+      @call self::MSG_MAPP_MAYBE_SAY_NEXT();
+    }
+}
+
+void SpeakSentenceExternal(byte *buf)
+{
+    const char initFormat[] = "\x1B\x43\x30\x1B\x45\x31{P%d}{T%d}{H%d}";
+    byte init[40];
+    word written;
+    int vol, speed, pitch;
+    StreamError err;
+
+    if(!serialDriver) return;
+
+    /* Try to get access to the serial driver for us */
+    if(StartSerialTimer(30*60))
+    {
+      err = SerialOpen(serialDriver, ETEX_PORT, 0, ETEX_IBUF_SIZE, ETEX_OBUF_SIZE, 0);
+
+      /* Set format used by Speechbox */
+      SerialSetFormat(serialDriver, ETEX_PORT, ETEX_FORMAT, SM_RAW, ETEX_BAUD);
+
+      /* Enable notification on incoming data */
+      StreamSetMessageNotify(serialDriver, ETEX_PORT,
+        ((1 << STREAM_TYPE_READER_OFFSET) |
+	     (STREAM_EVENT_DATA << STREAM_TYPE_EVENT_OFFSET) |
+	     (STREAM_MODE_MESSAGE << STREAM_TYPE_HOW_OFFSET)),
+        MSG_MAPP_SYNTH_SERIAL, @SpeakApp);
+    }
+    else
+      err = 0;
+
+    if(!err)
+    {
+      LocalGeosToDos((char *)buf, strlen((char *)buf), ' ');
+
+      /* Create init string for given parameter set */
+      vol = (int)(@call Volume::MSG_GEN_ITEM_GROUP_GET_SELECTION());
+      speed = (int)(@call Speed::MSG_GEN_ITEM_GROUP_GET_SELECTION());
+      pitch = (int)(@call Pitch::MSG_GEN_ITEM_GROUP_GET_SELECTION());
+
+      sprintf((char *)init, initFormat, (vol-5)*20, -(speed*100/3), (pitch*100/3));
+      SerialWrite(serialDriver, ETEX_PORT, STREAM_BLOCK, 
+        strlen((char *)init), init, &written);
+
+      /* Send text */
+      SerialWrite(serialDriver, ETEX_PORT, STREAM_BLOCK, 
+        strlen((char *)buf), buf, &written);
+      /* Send end of text */
+      SerialWrite(serialDriver, ETEX_PORT, STREAM_BLOCK, 1, (byte *)"\x04", &written);
+    }
+}
+
+void SpeakStopExternal(void)
+{
+    word written;
+
+    if(serialDriver && serialInUse)
+    {
+      SerialWrite(serialDriver, ETEX_PORT, STREAM_BLOCK, 1, (byte *)"\x03", &written);
+      StartSerialTimer(30);
+    }
+}
+
+void LoadExternal(void)
+{
+    serialInUse = 0;
+    serialDriver = SerialLoadDriver();
+}
+
+void UnloadExternal(void)
+{
+    if(serialInUse)
+    {
+      TimerStop(serialTimerHandle, serialTimerID);
+      SerialClose(serialDriver, ETEX_PORT, STREAM_DISCARD);
+      serialInUse = 0;
+    }
+
+    GeodeFreeDriver(serialDriver);
+    serialDriver = NullHandle;
+}
+
+
+/*
+ ***************************************************************************
+ *              Generic code for speech support
+ ***************************************************************************
+ */
+
+void SynthSwitch(SynthType type)
+{
+    if(type==synthType && !synthReload) return; // Short-circuit if no change
+
+    synthReload = FALSE;
+  
+    /* Unload previous synthesizer */
+    switch(synthType)
+    {
+      case SPEECH_INTERNAL:
+        UnloadVoice();
+        break;
+    
+      case SPEECH_EXTERNAL:
+        UnloadExternal();   
+        break;
+
+      case SPEECH_HTBRAILLE:
+        UnloadHTBraille();
+        break;
+
+      case SPEECH_ALBRAILLE:
+        UnloadALBraille();
+        break;
+    }
+
+    synthType = type;
+
+    /* Load new synthesizer */
+    switch(synthType)
+    {
+      case SPEECH_INTERNAL:
+        LoadVoice();
+        break;
+    
+      case SPEECH_EXTERNAL:
+        LoadExternal();   
+        break;
+ 
+      case SPEECH_HTBRAILLE:
+        LoadHTBraille();
+        break;
+
+      case SPEECH_ALBRAILLE:
+        LoadALBraille();
+        break;
+    }
+}
+
+void SynthSpeak(byte *buf)
+{
+    switch(synthType)
+    {
+      case SPEECH_INTERNAL:
+        SpeakSentenceInternal(buf);
+        break;
+    
+      case SPEECH_EXTERNAL:
+        SpeakSentenceExternal(buf);
+        break;
+    
+      case SPEECH_HTBRAILLE:
+        SpeakSentenceHTBraille(buf);
+        break;
+    
+      case SPEECH_ALBRAILLE:
+        SpeakSentenceALBraille(buf);
+        break;
+    }
+}
+
+void SynthStop(Boolean sync)
+{
+    switch(synthType)
+    {
+      case SPEECH_INTERNAL:
+        SpeakStopInternal();
+        break;
+      
+      case SPEECH_EXTERNAL:
+        if(sync) SpeakStopExternal();
+        break;
+
+      case SPEECH_HTBRAILLE:
+      case SPEECH_ALBRAILLE:
+        /* no need to stop anything */
+        break;
+    }
+}
+
+void SynthReload(void)
+{
+    /* Force reloading of current synthesizer */
+    synthReload = TRUE;
+}

@@ -1,0 +1,230 @@
+Speak todo
+----------
+
+
+ - Hilfetexte/SMS/E-Mail/Notizen automatisch vorlesen ja/nein
+
+ - Verarbeitung von Worten mit gemischter Klein/Großschreibung. Das soll so 
+   gehen, dass, wenn das ganze Wort nicht in den Libraries ist, das Wort in seine 
+   "Besteandteile" zerlegt wird. Also wird aus einer SMS wie
+
+        BinGleichAmBahnhof
+
+        Bin Gleich Am Bahnhof
+
+   Aus "DirectBox" wird "Direct Box" usw.
+
+ - Nicht-Sprechen von SMS-Versandfenstern, wohl auch bei Faxversand interessant. 
+   Denn: Wenn man beim SMS-Versand sofort und oftmals Ctrl zum Abbrechen der 
+   Sprache tippt, klappt alles. Lässt man es bleiben, erhält man erstmal eine 
+   unversandte Mitteilung in der Statusspalte links angezeigt. Vielleicht könnte
+   man da auch den Fortschrittsdialogton erzeugen?
+
+ - Composer (vollgraphisch)
+
+ - In Textfeldern: Wenn man Ctrl-E tippt, um zu Ende des Textes zu gelangen,
+   folgt die Braillezeile nicht. Ebenso Ctrl-X, Ctrl-V.
+
+ - Wenn man das erste Zeichen eines Wortes löscht, kommt oft eine Ansage der
+   Form: s p u c g
+ 
+
+---
+
+
+Benutzeroberfläche:
+ 
+ - Die Tastaturhilfe könnte grundsätzlich für Braille und Sprache auf 
+   dem Bildschirm angezeigt werden. Mit L/R bzw. mit Cursor Auf/Ab 
+   bewegt man sich in dem Fenster auf und ab und kann so einen 
+   nicht editierbaren Text mit der Tastenhilfe lesen. Jede andere 
+   gültige Taste geht direkt zur eingegebenen Taste(nfolge). Es 
+   werden immer nur die gültigen Befehle (Sprache Intern, Extern, 
+   Braille HT, Braille ALVA usw.) angezeigt.
+   Im Tastenlernmodus folgende Anzeige: "Taste(n) = Bedeutung"
+
+ - Automatisch Sprechen beim manuellen Programmstart (z.B. Installation)
+
+ - Registrierungs-Dialog nach festgelegter Zeit automatisch öffnen
+
+ - Sprach-/Braille-Optionen in eigene Unterdialoge
+
+ - Signalton am Listenende
+
+ - Erster Tastendruck nach längerer Pause wird nicht ausgeführt, aber gesprochen
+
+ - Bug: Deadlock zwischen install und speak bei Deinstallation, wenn TALX läuft
+
+ - Bug: Definiere mal im Kalender einen wiederkehrenden Termin, z.B. 
+   jeden Mittwoch von 13.00 bis 15.00 Uhr. Selektiere einen Tag, an 
+   dem das der einzige Termin ist. Der Termin wird dann in der 
+   Monatsansicht doppelt angesagt bzw. auf der Zeile angezeigt.
+
+ ? Bug: Hängt beim Versenden von Faxen
+
+ - Bug: Abstürze beim Bewegen im E-Mail-Fenster. Moeglicherweise bei
+   Bewegung ueber Listenende?
+
+ - Die Anzeige bei Eingabe von Ctrl-I ist recht seltsam. Da steht z.B. ein "i"
+   einfach so vor einem Wort herum, und der Fenstertitel enthält das gleiche
+   wie der Anfang des Focus...
+
+ - Standardwerte für alle speaklst-Einträge
+
+
+Zusatzfunktionen:
+
+ - Nach E-Mail-Empfang automatisch offline gehen
+
+ - Im WAP-Browser automatisch offline gehen
+
+ - Fehlerfenster bei Netzverlust automatisch schließen
+
+ - Über die für die Braille Wave definierten Chord-Befehle bzw. über 
+   Ctrl-F, Ctrl-Shift-F usw. wird die Suche aufgerufen. das ist ein 
+   Fenster, in das wie folgt aussieht:
+
+        Suche nach: [Textfeld]
+        Groß/Kleinschreibung beachten ist aus
+        Nur ganze Worte ist aus
+
+   Ctrl-F = Vorwarätssuche, Shift + Ctrl-F = Rückwärtssuche
+   Ctrl-G = Suche fortsetzen
+
+ - Netzverlust durch Tonfolge signalisieren
+
+ - Uhrzeitansage: volle Stunde/halbe Stunde/aus
+
+ - Ctrl-H für Suchen/Ersetzen
+
+ ? Abgetrennte Worte, wenn Anfang eines Listeneintrags unterstrichen
+
+
+Sonderfälle:
+
+ - WAP-Browser
+        - Automatischer virtueller Cursor ueber mehrere Objekte
+	- Links (unterstrichenen Text) vorlesen
+
+ - WWW-Browser
+	- Synchronisation zwischen eingebetteten Objekten und umgebendem Text
+	- Links (unterstrichenen Text) vorlesen
+
+ - Wenn ich eine SMS mit manueller Rufnummerneingabe verschicke,
+   wird ja nach der Eingabe der ersten Ziffer für Taste 1 
+   "OK" eingeblendet. TALX sagt in diesem Fall die eigentliche Ziffer,
+   also "0", nicht an, sondern nur "Taste 1 OK".
+
+ - Kalender: Grafiken für wiederkehrende Termine usw.
+
+ - Uhr: akustische Unterstützung bei Weckzeit-Einstellung
+
+ - NFile: in "Move/Copy"-Dialog werden deaktivierte Buttons vorgelesen
+
+ - In den Uhreinstellungen gibt es die Möglichkeit, die Sommerzeit für 
+   den Heimatort und den Zielort ein- und auszuschalten. Hier sagt 
+   TALX zwar "Heimatort" und "Zielort" an, nicht aber "Sommerzeit".
+
+ - Wenn ich mit zwei Partnern telefoniere und den einen mit Taste 4
+   auflege, wird plötzlich auch der andere nicht mehr gesprochen. 
+
+ - Bei TALX 9110 hat ein Kunde seine PIN2 dreimal falsch eingegeben. Es erscheint 
+   das Fenster zur Eingabe des PUC2, das von TALX aber nicht gesprochen wird. Es 
+   ist ein Hinweis auf der rechten Hälfte des Bildschirms, Fenstertitel "Hinweis", 
+   darunter der Text, der besagt, dass die PIN2 mehrfach falsch eingegeben wurde, 
+   und dass man jetzt den PUC2 eingeben soll, darunter das Textfeld zur Eingabe, kein 
+   Softkey ist belegt. TALX liest nur den Fenstertitel und "Text".
+
+
+Sprache:
+
+ - Z, Leertaste schaltet zwischen virtuellem und Textcursor um. In 
+   Feldern ohne Cursor wird automatisch auf virtuellen Cursor 
+   umgeschaltet, auch bei WAP. Bei eingeschaltetem Lese-Cursor 
+   (virtuellem Cursor) haben die Cursor-Tasten die übliche Bewegung 
+   zur Folge, nur eben für den virtuellen Cursor. 
+
+ - Wort- und zeichenweise Bewegung mit virtuellem Cursor
+
+ - Z, Ctrl-Links:
+    - Font-, Attribut- und Zeicheninfos für das aktuelle Zeichen
+    - Zeichenbezeichnung aus Braille-Tabelle, ASCII-Code, Zeile/Spalte
+
+ - Die in diesen Fällen sinnvollen Lesefunktionen (Akt. Zeile lesen,
+   buchstabieren usw.) sollten auch für die aktuell selektierten Objekte
+   funktionieren. Beim Buchstabieren könnte ja z.B. der aktuelle Menüpunkt
+   buchstabiert werden...
+
+ - Auswahl im TALX-Fenster, ob "Selektiert" "nicht selektiert"
+   (nicht unselektiert...) oder beides angesagt werden soll
+   (bei Mehrfach-Selektionen).
+
+ - Beim Markieren eines Blockes mit den Cursor-Tasten des Communicators sollte
+   immer angesagt werden, was gerade selektiert wurde. Also, z.B. "Markiere H",
+   "Markiere i" für Einzelbuchstaben oder "Markiere Hilfe Leerzeichen" für ganze 
+   Worte.
+
+
+Externe Sprachausgabe:
+
+ - Erkennung der Sprachausgabe
+
+
+Interne Sprachausgabe:
+
+ - Spezieller Kopierschutz für Händler-eigene Libraries (Seriennummern)
+
+ - Aufnahme von WAVs für unbekannter Worte
+
+ - Wenn man nach einer Aufnahme Taste 4 (Stop) tippt, ertönt ein 
+   Tonsignal. Da könnte TALX ja im Prinzip wieder sprechen... Ich 
+   denke, die Regel sollte sein, dass TALX nur dann nicht spricht, 
+   wenn vorher der Softkey für Aufnahme getippt wurde, und es sollte 
+   wieder sprechen, sobald man dann Pause oder Stop tippt.
+
+ - Timing der Sprache nach gedrückten Tasten, so ändern, dass Du die Zeit,
+   die Du zum Erstellen der Wave-Datei brauchst, mit in die Zeit einbeziehst,
+   die Du auf eine andere Taste wartest?
+
+ - Deadlock, wenn Vrec-Controller durch Dialog blockiert -> nicht sprechen
+
+ - Sprechen/Buchstabieren des Apostroph
+
+ - Diakritische Zeichen über Ersetz-Mechanismus sprechen
+
+Braille:
+ 
+ - B5 = Umschaltung Zeichen/Attribute
+
+	P12 = Fett
+	P24 = Kursiv
+	P36 = Unterstrichen
+	P8  = Highlight
+
+ - SP+Routing sollte das zugehörige Zeichen beschreiben:
+   "Font, Größe, Attribute, Name des Zeichens."
+
+ - Optional: gelockerte Loslaß-Regeln
+
+ - Tastenkombination für Tastenlernmodus ein/aus
+
+ - Das CHR-Fenster wird bei der Anzeige des Focus zeichenweise mit 
+   Erklärung angezeigt, sonst (mit Lese-Cursor) im Überblick, aber 
+   ohne Erklärung. Auswahl mit Enter oder Routing.
+
+ - Routing bei Focusanzeige ja/nein
+
+ - Bei Timeout der Antwort von der Zeile weiter FF senden
+
+ - Zeichennamen in CHR-Tabelle anzeigen
+
+ - Wenn man eine Umstellung bei TALX über einen Hotkey vornimmt, wird die 
+   entsprechende Änderung im focussierten TALX-Fenster nicht wiedergegeben. 
+   Beispiel: Wenn man mit [TALX], [Extras] zum Braille-Modus umschaltet, erhält man 
+   die Anzeige "Ausgabe ist Braille (Handy Tech)". tippt man dann B1, um den Focus 
+   zu sehen, steht da: "Ausgabe ist Interne Sprache". Tippt man R, dann R, um 
+   zwischen den Menüpunkten des TALX-Fensters zu wechseln, wird wieder korrekt 
+   angezeigt.
+
+ - Leerzeichen hinter "F:", wenn eine Liste mit einer nicht erkannten Grafik beginnt
+ 
